@@ -13,6 +13,7 @@ jsonschema==4.25.1
 jsonschema-specifications==2025.9.1
 packaging==25.0
 pillow==12.0.0
+pillow_heif==1.1.1
 psycopg2-binary==2.9.11
 PyJWT==2.10.1
 python-decouple==3.8
