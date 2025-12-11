@@ -30,7 +30,7 @@ class CustomUser(AbstractUser):
     # related_name qo‘shish
     groups = models.ManyToManyField(
         Group,
-        related_name='customuser_set',  # <--- default user_set bilan to‘qnashmaydi
+        related_name='customuser_set',  
         blank=True,
         help_text='The groups this user belongs to.',
         verbose_name='groups'

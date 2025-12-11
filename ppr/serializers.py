@@ -11,6 +11,24 @@ def generate_unique_passport():
 
 
 
+ALLOWED_IMAGE_FORMATS = [
+    "image/jpeg",
+    "image/png",
+    "image/jpg",
+    "image/heic",
+    "image/heif",
+]
+
+def validate_image_format(image):
+    content_type = image.content_type.lower()
+    if content_type not in ALLOWED_IMAGE_FORMATS:
+        raise serializers.ValidationError(
+            f"Rasm formati qo‘llab-quvvatlanmaydi! ({content_type}). "
+            "Faqat JPG, JPEG, PNG, HEIC, HEIF formatlari qabul qilinadi."
+        )
+
+
+
 
 
 class UserTuzilmaSerializer(serializers.ModelSerializer):
@@ -343,6 +361,13 @@ class ArizaYuborishSerializer(serializers.ModelSerializer):
         return user.username
 
     
+    
+    def validate_photos(self, photos):
+        for img in photos:
+            validate_image_format(img)
+        return photos
+
+    
     def get_steplar(self, obj):
         """
         Bu yerda:
@@ -508,6 +533,13 @@ class KelganArizalarSerializer(serializers.ModelSerializer):
         elif user.bekat_nomi:
             return user.bekat_nomi.bekat_nomi
         return user.username
+    
+    
+    def validate_rasmlar(self, rasmlar):
+        for img in rasmlar:
+            validate_image_format(img)
+        return rasmlar
+
 
     def validate_parol(self, value):
         user = self.context['request'].user
