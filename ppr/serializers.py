@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import *
-
+import os
 import random
 
 def generate_unique_passport():
@@ -11,23 +11,27 @@ def generate_unique_passport():
 
 
 
-ALLOWED_IMAGE_FORMATS = [
-    "image/jpeg",
-    "image/png",
-    "image/jpg",
-    "image/heic",
-    "image/heif",
-]
+ALLOWED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".heic", ".heif"]
 
 def validate_image_format(image):
+    ext = os.path.splitext(image.name)[1].lower()
     content_type = image.content_type.lower()
-    if content_type not in ALLOWED_IMAGE_FORMATS:
+
+    allowed_ext = [".jpg", ".jpeg", ".png", ".heic", ".heif"]
+    allowed_mime = [
+        "image/jpeg",
+        "image/png",
+        "image/heic",
+        "image/heif",
+        "application/octet-stream",  
+        "binary/octet-stream"
+    ]
+
+    if ext not in allowed_ext and content_type not in allowed_mime:
         raise serializers.ValidationError(
-            f"Rasm formati qo‘llab-quvvatlanmaydi! ({content_type}). "
-            "Faqat JPG, JPEG, PNG, HEIC, HEIF formatlari qabul qilinadi."
+            f"Rasm formati qo‘llab-quvvatlanmaydi! ({content_type} / {ext}). "
+            "Faqat JPG, JPEG, PNG, HEIC, HEIF formatlari ruxsat etiladi."
         )
-
-
 
 
 
