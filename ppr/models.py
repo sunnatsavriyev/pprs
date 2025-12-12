@@ -242,7 +242,7 @@ class KelganArizalar(models.Model):
     ariza = models.ForeignKey(ArizaYuborish, on_delete=models.CASCADE, related_name="kelganlar")
     # rasm = models.ImageField(upload_to='kelgan_rasmlar/')
     ilovalar = models.FileField(upload_to='ilovalar/', null=True, blank=True)
-    akt_file = models.FileField(upload_to='kelgan_fayllar/')
+    akt_file = models.FileField(upload_to='kelgan_fayllar/', null=True, blank=True)
     sana = models.DateTimeField(auto_now_add=True)
     comment = models.TextField()
     parol = models.CharField(max_length=100)
