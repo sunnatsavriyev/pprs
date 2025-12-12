@@ -13,14 +13,14 @@ router.register("ppr-turi", PPRTuriViewSet)
 router.register("obyekt", ObyektNomiViewSet)
 router.register("ppr-jadval", PPRJadvalViewSet)
 router.register("hujjatlar", HujjatlarViewSet)
-router.register("notifications", NotificationsViewSet)
+router.register("notifications", NotificationsViewSet, basename="notifications")
 
 
 urlpatterns = [
     path("", include(router.urls)),
     path("tuzilma-nomi/", TuzilmaNomiViewSet.as_view({'get':'list'}), name='tuzilma-nomi'),
     path("ariza-image-delete/<int:pk>/", ArizaImageDeleteAPIView.as_view()),
-    path("kelgan-arizalar-image-delete/<int:pk>/", KelganArizalarImagedeleteAPIView.as_view()),
+    # path("kelgan-arizalar-image-delete/<int:pk>/", KelganArizalarImagedeleteAPIView.as_view()),
 ]
 
 

@@ -241,6 +241,7 @@ class KelganArizalar(models.Model):
 
     ariza = models.ForeignKey(ArizaYuborish, on_delete=models.CASCADE, related_name="kelganlar")
     # rasm = models.ImageField(upload_to='kelgan_rasmlar/')
+    ilovalar = models.FileField(upload_to='ilovalar/', null=True, blank=True)
     akt_file = models.FileField(upload_to='kelgan_fayllar/')
     sana = models.DateTimeField(auto_now_add=True)
     comment = models.TextField()
@@ -255,13 +256,13 @@ class KelganArizalar(models.Model):
 
 
 
-class KelganArizalarImage(models.Model):
-    kelgan = models.ForeignKey(
-        KelganArizalar, 
-        on_delete=models.CASCADE, 
-        related_name="rasmlar"
-    )
-    rasm = models.ImageField(upload_to="kelgan_rasmlar_multi/")
+# class KelganArizalarImage(models.Model):
+#     kelgan = models.ForeignKey(
+#         KelganArizalar, 
+#         on_delete=models.CASCADE, 
+#         related_name="rasmlar"
+#     )
+#     rasm = models.ImageField(upload_to="kelgan_rasmlar_multi/")
 
 
 
@@ -269,6 +270,7 @@ class KelganArizalarImage(models.Model):
 
 class PPRTuri(models.Model):
     nomi = models.CharField(max_length=200)
+    davriyligi = models.IntegerField(max_length=100, help_text="Masalan: har necha oyda", null=True, blank=True)
 
     def __str__(self):
         return self.nomi
@@ -296,9 +298,14 @@ class PPRJadval(models.Model):
         ("Noyabr", "Noyabr"),
         ("Dekabr", "Dekabr"),
     )
+    Choose_kim = (
+        ("Texnik", "Texnik"),
+        ("AKT_xodimi", "AKT_xodimi"),
+        )
     oy = models.CharField(max_length=20, choices=Choose_oy)
     obyekt = models.ForeignKey(ObyektNomi, on_delete=models.CASCADE)
     ppr_turi = models.ForeignKey(PPRTuri, on_delete=models.CASCADE)
+    kim_tomonidan = models.CharField(max_length=255, null=True, blank=True, choices=Choose_kim)
 
     def __str__(self):
         return f"{self.oy} - {self.obyekt}"

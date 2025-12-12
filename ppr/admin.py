@@ -37,9 +37,9 @@ class ArizaYuborishImageInline(admin.TabularInline):
     extra = 1
 
 
-class KelganArizalarImageInline(admin.TabularInline):
-    model = KelganArizalarImage
-    extra = 1
+# class KelganArizalarImageInline(admin.TabularInline):
+#     model = KelganArizalarImage
+#     extra = 1
 
 
 
@@ -66,7 +66,7 @@ class KelganArizalarAdmin(admin.ModelAdmin):
     list_filter = ('status', 'is_approved')
     readonly_fields = ('created_by', 'sana')
 
-    inlines = [KelganArizalarImageInline]
+    # inlines = [KelganArizalarImageInline]
     
     
     def save_model(self, request, obj, form, change):
@@ -79,8 +79,8 @@ class KelganArizalarAdmin(admin.ModelAdmin):
 
 @admin.register(PPRTuri)
 class PPRTuriAdmin(admin.ModelAdmin):
-    list_display = ('nomi',)
-    search_fields = ('nomi',)
+    list_display = ('nomi','davriyligi',)
+    search_fields = ('nomi','davriyligi',)
 
 
 # ObyektNomi
@@ -95,9 +95,9 @@ class ObyektNomiAdmin(admin.ModelAdmin):
 
 @admin.register(PPRJadval)
 class PPRJadvalAdmin(admin.ModelAdmin):
-    list_display = ('oy', 'obyekt', 'ppr_turi')
+    list_display = ('oy', 'obyekt', 'ppr_turi', 'kim_tomonidan',)
     list_filter = ('oy',)
-    search_fields = ('obyekt__obyekt_nomi', 'ppr_turi__nomi')
+    search_fields = ('obyekt__obyekt_nomi', 'ppr_turi__nomi', 'kim_tomonidan',)
 
 
 # Hujjatlar

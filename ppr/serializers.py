@@ -494,10 +494,10 @@ class ArizaYuborishSerializer(serializers.ModelSerializer):
 
 
 
-class KelganArizaImagesSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = KelganArizalarImage
-        fields = ["id","rasm"]
+# class KelganArizaImagesSerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = KelganArizalarImage
+#         fields = ["id","rasm"]
 
 
 class KelganArizalarSerializer(serializers.ModelSerializer):
@@ -514,12 +514,12 @@ class KelganArizalarSerializer(serializers.ModelSerializer):
         write_only=True
     )
     parol = serializers.CharField(write_only=True)
-    rasmlar = KelganArizaImagesSerializer(many=True, read_only=True)
+    # rasmlar = KelganArizaImagesSerializer(many=True, read_only=True)
 
     class Meta:
         model = KelganArizalar
         fields = [
-            "id", "rasmlar", "akt_file", "comment", "created_by", 
+            "id", "akt_file",'ilovalar', "comment", "created_by", 
             "is_approved", "sana", "ariza_comment", "ariza_tuzilma", 
             "ariza_kim_tomonidan", "ariza", "parol"
         ]
@@ -539,10 +539,10 @@ class KelganArizalarSerializer(serializers.ModelSerializer):
         return user.username
     
     
-    def validate_rasmlar(self, rasmlar):
-        for img in rasmlar:
-            validate_image_format(img)
-        return rasmlar
+    # def validate_rasmlar(self, rasmlar):
+    #     for img in rasmlar:
+    #         validate_image_format(img)
+    #     return rasmlar
 
 
     def validate_parol(self, value):
@@ -553,7 +553,7 @@ class KelganArizalarSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         user = self.context['request'].user
-        images = validated_data.pop("rasmlar", [])
+        # images = validated_data.pop("rasmlar", [])
         
         # validated_data ichida 'created_by' va 'is_approved' bo'lsa olib tashlaymiz
         validated_data.pop('created_by', None)
@@ -566,9 +566,9 @@ class KelganArizalarSerializer(serializers.ModelSerializer):
             **validated_data
         )
 
-        # Multi-image save
-        for img in images:
-            KelganArizalarImage.objects.create(kelgan=kelgan, rasm=img)
+        # # Multi-image save
+        # for img in images:
+        #     KelganArizalarImage.objects.create(kelgan=kelgan, rasm=img)
 
         # Asosiy ariza statusini "bajarildi" ga o'zgartirish
         kelgan.ariza.status = "bajarildi"
@@ -580,15 +580,15 @@ class KelganArizalarSerializer(serializers.ModelSerializer):
     
     
     def update(self, instance, validated_data):
-        images = validated_data.pop("rasmlar", None)
+        # images = validated_data.pop("rasmlar", None)
 
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
 
-        if images:
-            for img in images:
-                KelganArizalarImage.objects.create(kelgan=instance, rasm=img)
+        # if images:
+        #     for img in images:
+        #         KelganArizalarImage.objects.create(kelgan=instance, rasm=img)
 
         return instance
 
@@ -694,12 +694,12 @@ class ObyektNomiSerializer(serializers.ModelSerializer):
 class PPRJadvalSerializer(serializers.ModelSerializer):
     obyekt = serializers.PrimaryKeyRelatedField(queryset=ObyektNomi.objects.all())
     ppr_turi = serializers.PrimaryKeyRelatedField(queryset=PPRTuri.objects.all())
-
+    ppr_davriyligi = serializers.CharField(source='ppr_turi.davriyligi', read_only=True)
     obyekt_name = serializers.CharField(source='obyekt.obyekt_nomi', read_only=True)
     ppr_turi_name = serializers.CharField(source='ppr_turi.nomi', read_only=True)
     class Meta:
         model = PPRJadval
-        fields = ['id', 'oy', 'obyekt', 'ppr_turi', 'obyekt_name', 'ppr_turi_name']
+        fields = ['id', 'oy', 'obyekt', 'ppr_turi', 'kim_tomonidan','obyekt_name', 'ppr_turi_name', 'ppr_davriyligi']
 
 
 class HujjatlarSerializer(serializers.ModelSerializer):

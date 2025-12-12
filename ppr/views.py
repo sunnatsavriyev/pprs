@@ -12,8 +12,8 @@ import django_filters
 from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import action
-
-
+from rest_framework.permissions import IsAuthenticated
+from datetime import datetime
 
 
 
@@ -340,25 +340,25 @@ class ArizaImageDeleteAPIView(APIView):
         )
 
 
-class KelganArizalarImagedeleteAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+# class KelganArizalarImagedeleteAPIView(APIView):
+#     permission_classes = [permissions.IsAuthenticated]
 
-    def delete(self, request, pk):
-        image = get_object_or_404(KelganArizalarImage, pk=pk)
+#     def delete(self, request, pk):
+#         image = get_object_or_404(KelganArizalarImage, pk=pk)
 
-        if image.kelgan_ariza.created_by != request.user and not request.user.is_superuser:
-            return Response(
-                {"detail": "Ruxsat yo'q"},
-                status=status.HTTP_403_FORBIDDEN
-            )
+#         if image.kelgan_ariza.created_by != request.user and not request.user.is_superuser:
+#             return Response(
+#                 {"detail": "Ruxsat yo'q"},
+#                 status=status.HTTP_403_FORBIDDEN
+#             )
 
-        image.rasm.delete(save=False)
-        image.delete()
+#         image.rasm.delete(save=False)
+#         image.delete()
 
-        return Response(
-            {"detail": "Rasm o‘chirildi"},
-            status=status.HTTP_204_NO_CONTENT
-        )
+#         return Response(
+#             {"detail": "Rasm o‘chirildi"},
+#             status=status.HTTP_204_NO_CONTENT
+#         )
 
 
             
@@ -385,6 +385,36 @@ class HujjatlarViewSet(viewsets.ModelViewSet):
     pagination_class = CustomPagination
 
 
-class NotificationsViewSet(viewsets.ModelViewSet):
-    queryset = Notifications.objects.all()
+class NotificationsViewSet(viewsets.ReadOnlyModelViewSet):
+    
     serializer_class = NotificationsSerializer
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request, *args, **kwargs):
+        # Hozirgi oy
+        current_month = datetime.now().month  
+        user = request.user
+
+        # Userning PPRJadval yozuvlari → lekin faqat shu oy
+        ppr_this_month = PPRJadval.objects.filter(
+            oy=current_month,
+            kim_tomonidan=user
+        )
+
+        # Agar PPR yo‘q bo‘lsa
+        if not ppr_this_month.exists():
+            return Response(
+                {"message": "Ushbu oyda PPR topilmadi."},
+                status=status.HTTP_200_OK
+            )
+
+        # Natijalarni serializer qilish
+        serialized = PPRJadvalSerializer(ppr_this_month, many=True).data
+
+        return Response(
+            {
+                "message": f"Bu oyda siz bajarishingiz kerak bo‘lgan {len(serialized)} ta PPR mavjud.",
+                "pprlar": serialized
+            },
+            status=status.HTTP_200_OK
+        )
