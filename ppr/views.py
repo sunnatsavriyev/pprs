@@ -65,6 +65,21 @@ class UserTuzilmaViewSet(viewsets.ModelViewSet):
 
 
 
+
+class MeAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        serializer = UserTuzilmaSerializer(
+            request.user,
+            context={"request": request}
+        )
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+
+
+
 class TuzilmaNomiViewSet(viewsets.ModelViewSet):
     queryset = TarkibiyTuzilma.objects.filter(status=True)
     serializer_class = TuzilmaSerializers
@@ -395,7 +410,6 @@ class NotificationsViewSet(viewsets.ReadOnlyModelViewSet):
         current_month = datetime.now().month  
         user = request.user
 
-        # Userning PPRJadval yozuvlari → lekin faqat shu oy
         ppr_this_month = PPRJadval.objects.filter(
             oy=current_month,
             kim_tomonidan=user
