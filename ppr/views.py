@@ -295,7 +295,7 @@ class KelganArizalarCreateViewSet(viewsets.ModelViewSet):
 
         # Faqat hali bajarilmagan arizalarni dropdownga chiqaramiz
         user = self.request.user
-        ariza_qs = ArizaYuborish.objects.exclude(status="bajarildi")
+        ariza_qs = ArizaYuborish.objects.exclude(status="bajarilgan")
 
         if not user.is_superuser:
             if user.tarkibiy_tuzilma:
@@ -328,7 +328,7 @@ class KelganArizalarCreateViewSet(viewsets.ModelViewSet):
         )
         # Javob qo‘shilganda asosiy arizani statusini "bajarildi" ga o‘zgartirish
         ariza = kelgan.ariza
-        ariza.status = "bajarildi"
+        ariza.status = "bajarilgan"
         ariza.save()
 
 

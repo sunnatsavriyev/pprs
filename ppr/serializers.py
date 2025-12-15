@@ -398,11 +398,8 @@ class ArizaYuborishSerializer(serializers.ModelSerializer):
 
     
     def get_steplar(self, obj):
-        """
-        Bu yerda:
-        1. Ariza yuborilgandagi step (bosh status) qo‘shiladi.
-        2. KelganArizalar orqali qo‘shilgan barcha step’lar qo‘shiladi.
-        """
+
+        request = self.context.get('request')
         steps = []
 
         # 1. Asosiy ariza step
@@ -426,8 +423,8 @@ class ArizaYuborishSerializer(serializers.ModelSerializer):
                 "created_by": step.created_by.username if step.created_by else None,
                 "is_approved": step.is_approved,
                 "sana": step.sana,
-                "akt_file": step.akt_file.url if step.akt_file else None,
-                "ilovalar": step.ilovalar.url if step.ilovalar else None,
+                "akt_file": request.build_absolute_uri(step.akt_file.url) if step.akt_file else None,
+                "ilovalar": request.build_absolute_uri(step.ilovalar.url) if step.ilovalar else None,
             })
 
         return steps
@@ -584,23 +581,27 @@ class KelganArizalarSerializer(serializers.ModelSerializer):
         user = self.context['request'].user
         # images = validated_data.pop("rasmlar", [])
         
-        # validated_data ichida 'created_by' va 'is_approved' bo'lsa olib tashlaymiz
         validated_data.pop('created_by', None)
         validated_data.pop('is_approved', None)
+        akt_file = validated_data.pop('akt_file', None)
+        ilovalar = validated_data.pop('ilovalar', None)
 
         kelgan = KelganArizalar.objects.create(
             created_by=user,
-            status="jarayonda",
+            status="bajarilgan",
             is_approved=user.is_superuser,
+            akt_file=akt_file,
+            ilovalar=ilovalar,
             **validated_data
         )
+        print("Validated data:", validated_data)
 
         # # Multi-image save
         # for img in images:
         #     KelganArizalarImage.objects.create(kelgan=kelgan, rasm=img)
 
         # Asosiy ariza statusini "bajarildi" ga o'zgartirish
-        kelgan.ariza.status = "bajarildi"
+        kelgan.ariza.status = "bajarilgan"
         kelgan.ariza.save()
 
         return kelgan

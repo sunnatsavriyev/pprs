@@ -241,7 +241,7 @@ class ArizaYuborishImage(models.Model):
 
 class KelganArizalar(models.Model):
     STATUS = (
-        ("bajarildi", "Bajarildi"),
+        ("bajarilgan", "Bajarilgan"),
         ("jarayonda", "Jarayonda"),
     )
 
