@@ -6,7 +6,7 @@ from .models import *
 
 @admin.register(CustomUser)
 class CustomUserAdmin(admin.ModelAdmin):
-    list_display = ('username', 'role', 'tarkibiy_tuzilma', 'bekat_nomi', 'is_staff',)
+    list_display = ('username', 'role', 'tarkibiy_tuzilma', 'bekat_nomi', 'is_staff','passport_seriya','birth_date', 'email',)
     fieldsets = (
         (None, {'fields': ('username', 'password', 'role', 'tarkibiy_tuzilma', 'bekat_nomi')}),
         ('Permissions', {'fields': ('is_staff','is_superuser','is_active')}),
@@ -16,18 +16,18 @@ class CustomUserAdmin(admin.ModelAdmin):
 
 @admin.register(TarkibiyTuzilma)
 class TarkibiyTuzilmaAdmin(admin.ModelAdmin):
-    list_display = ('tuzilma_nomi', 'rahbari','email', 'birth_date' ,'status', 'is_pending', 'updated_by','created_by', 'created_at')
+    list_display = ('tuzilma_nomi', 'rahbari','status', 'is_pending', 'updated_by','created_by', 'created_at')
     list_filter = ('status', 'is_pending')
-    search_fields = ('tuzilma_nomi', 'rahbari', 'passport_seriya')
+    search_fields = ('tuzilma_nomi', 'rahbari')
 
 
 
 
 @admin.register(Bekat)
 class BekatAdmin(admin.ModelAdmin):
-    list_display = ('bekat_nomi', 'rahbari','email', 'birth_date' , 'status', 'is_pending', 'updated_by','created_by', 'created_at')
+    list_display = ('bekat_nomi', 'rahbari', 'status', 'is_pending', 'updated_by','created_by', 'created_at')
     list_filter = ('status', 'is_pending')
-    search_fields = ('bekat_nomi', 'rahbari', 'passport_seriya')
+    search_fields = ('bekat_nomi', 'rahbari')
 
 
 # ArizaYuborish

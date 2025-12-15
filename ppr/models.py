@@ -26,7 +26,11 @@ class CustomUser(AbstractUser):
         related_name='users'
     )
     
-
+    photo = models.ImageField(upload_to='admin_photos/', blank=True, null=True)
+    birth_date = models.DateField(blank=True, null=True)
+    passport_seriya = models.CharField(max_length=9, blank=True, null=True)
+    # email aslida AbstractUser da mavjud, lekin agar null=True kerak bo'lsa:
+    email = models.EmailField(blank=True, null=True)
     # related_name qo‘shish
     groups = models.ManyToManyField(
         Group,
@@ -112,11 +116,12 @@ class Bekat(models.Model):
     bekat_nomi = models.CharField(max_length=255, choices=BEKAT_CHOICES)
     faoliyati = models.TextField()
     rahbari = models.CharField(max_length=255)
-    email = models.EmailField(null=True, blank=True)
-    birth_date = models.DateField(null=True, blank=True)
-    photo = models.ImageField(upload_to='bekat_rahbar_rasmlari/', blank=True, null=True)    
+    photo = models.ImageField(upload_to='user_photos/', blank=True, null=True)
+    birth_date = models.DateField(blank=True, null=True)
+    passport_seriya = models.CharField(max_length=9, blank=True, null=True)
+    # email aslida AbstractUser da mavjud, lekin agar null=True kerak bo'lsa:
+    email = models.EmailField(blank=True, null=True)
     status = models.BooleanField()
-    passport_seriya = models.CharField(max_length=9, unique=True)
     is_pending = models.BooleanField(default=False)
     created_by = models.ForeignKey(
         'CustomUser',
@@ -149,11 +154,12 @@ class TarkibiyTuzilma(models.Model):
     tuzilma_nomi = models.CharField(max_length=255)
     faoliyati = models.TextField()
     rahbari = models.CharField(max_length=255)
-    email = models.EmailField(null=True, blank=True)
-    birth_date = models.DateField(null=True, blank=True)
-    photo = models.ImageField(upload_to='rahbar_rasmlari/', blank=True, null=True)
+    photo = models.ImageField(upload_to='user_photos/', blank=True, null=True)
+    birth_date = models.DateField(blank=True, null=True)
+    passport_seriya = models.CharField(max_length=9, blank=True, null=True)
+    # email aslida AbstractUser da mavjud, lekin agar null=True kerak bo'lsa:
+    email = models.EmailField(blank=True, null=True)
     status = models.BooleanField()
-    passport_seriya = models.CharField(max_length=9, unique=True)
     created_by = models.ForeignKey(
         'CustomUser',
         on_delete=models.SET_NULL,

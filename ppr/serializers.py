@@ -96,7 +96,10 @@ class UserTuzilmaSerializer(serializers.ModelSerializer):
 
         elif instance.role == "admin" or instance.is_superuser:
             rep["faoliyati"] = "Admin foydalanuvchi"
-            rep["photo"] = None
+            rep["photo"] = request.build_absolute_uri(instance.photo.url) if instance.photo else None
+            rep["email"] = instance.email
+            rep["birth_date"] = instance.birth_date.strftime("%d-%m-%Y") if instance.birth_date else None
+            rep["passport_seriya"] = instance.passport_seriya
 
         # password qismi shunchaki
         show_password = False
@@ -112,6 +115,7 @@ class UserTuzilmaSerializer(serializers.ModelSerializer):
             rep["password"] = None  # yulduzcha ko'rsatmasdan
 
         return rep
+
 
 
 
@@ -159,6 +163,16 @@ class UserTuzilmaSerializer(serializers.ModelSerializer):
             password=raw_password,
             role=role
         )
+        
+        if role == "admin":
+            user.email = validated_data.get("email", "")
+            user.birth_date = validated_data.get("birth_date")
+            user.passport_seriya = validated_data.get("passport_seriya")
+            if uploaded_photo:
+                user.photo = uploaded_photo
+            user._raw_password = raw_password
+            user.save()
+            return user
 
         if role == "tarkibiy":
             user.tarkibiy_tuzilma = tuzilma
@@ -291,6 +305,17 @@ class UserTuzilmaSerializer(serializers.ModelSerializer):
                     bekat_obj.save()
 
                 instance.bekat_nomi = bekat_obj
+            
+            
+        elif new_role == "admin":
+            if "email" in validated_data:
+                instance.email = validated_data["email"]
+            if "birth_date" in validated_data:
+                instance.birth_date = validated_data["birth_date"]
+            if "passport_seriya" in validated_data:
+                instance.passport_seriya = validated_data["passport_seriya"]
+            if uploaded_photo is not None:
+                instance.photo = uploaded_photo
 
         instance.role = new_role
         instance.save()
@@ -387,10 +412,12 @@ class ArizaYuborishSerializer(serializers.ModelSerializer):
             "status": obj.status,
             "created_by": obj.created_by.username if obj.created_by else None,
             "is_approved": obj.is_approved,
-            "sana": obj.sana
+            "sana": obj.sana,
+            "akt_file": None,
+            "ilovalar": None,
         })
 
-        # 2. KelganArizalar step’lari
+        # 2. KelganArizalar steplari
         for step in obj.kelganlar.all().order_by('sana'):
             steps.append({
                 "id": step.id,
@@ -398,7 +425,9 @@ class ArizaYuborishSerializer(serializers.ModelSerializer):
                 "status": step.status,
                 "created_by": step.created_by.username if step.created_by else None,
                 "is_approved": step.is_approved,
-                "sana": step.sana
+                "sana": step.sana,
+                "akt_file": step.akt_file.url if step.akt_file else None,
+                "ilovalar": step.ilovalar.url if step.ilovalar else None,
             })
 
         return steps
@@ -607,20 +636,25 @@ class KelganArizalarSerializer(serializers.ModelSerializer):
 # serializers.py
 class KelganArizaSerializer(serializers.ModelSerializer):
     created_by = serializers.SerializerMethodField()
-    sana = serializers.DateTimeField(format="%d-%m-%Y", read_only=True)
+    sana = serializers.DateTimeField(format="%d-%m-%Y")
+    akt_file = serializers.FileField(use_url=True)
+
     class Meta:
         model = KelganArizalar
-        fields = ["id", "akt_file", "comment", "status", "created_by", "is_approved", "sana"]
+        fields = [
+            "id",
+            "comment",
+            "status",
+            "created_by",
+            "is_approved",
+            "sana",
+            "akt_file",
+            "ilovalar"
+        ]
 
-    
     def get_created_by(self, obj):
         user = obj.created_by
-        if not user:
-            return None
-        full_name = user.get_full_name()
-        if full_name:
-            return full_name
-        return user.username
+        return user.get_full_name() or user.username if user else None
 
 
 class ArizaYuborishWithKelganSerializer(ArizaYuborishSerializer):
