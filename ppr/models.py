@@ -1,6 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser, Group, Permission
-
+from django.conf import settings
 
 
 class CustomUser(AbstractUser):
@@ -275,8 +275,13 @@ class KelganArizalar(models.Model):
 
 
 class PPRTuri(models.Model):
-    nomi = models.CharField(max_length=200)
-    davriyligi = models.IntegerField(max_length=100, help_text="Masalan: har necha oyda", null=True, blank=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True)
+    nomi = models.CharField(max_length=100, help_text="Masalan: Nomi", null=True, blank=True)
+    qisqachanomi = models.CharField(max_length=100, help_text="Masalan: Qisqa nomi", null=True, blank=True)
+    davriyligi = models.CharField(max_length=100, help_text="Masalan: qancha vaqtda", null=True, blank=True)
+    comment = models.TextField(null=True, blank=True)
+    file = models.FileField(upload_to='ppr_turlari/', null=True, blank=True)
+    kimlar_qiladi = models.CharField(max_length=255, null=True, blank=True)
 
     def __str__(self):
         return self.nomi
@@ -309,9 +314,17 @@ class PPRJadval(models.Model):
         ("AKT_xodimi", "AKT_xodimi"),
         )
     oy = models.CharField(max_length=20, choices=Choose_oy)
+    sana = models.DateField(null=True, blank=True)
     obyekt = models.ForeignKey(ObyektNomi, on_delete=models.CASCADE)
     ppr_turi = models.ForeignKey(PPRTuri, on_delete=models.CASCADE)
     kim_tomonidan = models.CharField(max_length=255, null=True, blank=True, choices=Choose_kim)
+    
+    tasdiqlangan = models.BooleanField(default=False)
+
+    def save(self, *args, **kwargs):
+        if self.pk and self.tasdiqlangan:
+            raise ValueError("Tasdiqlangan jadvalni tahrirlash mumkin emas!")
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.oy} - {self.obyekt}"

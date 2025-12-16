@@ -79,8 +79,8 @@ class KelganArizalarAdmin(admin.ModelAdmin):
 
 @admin.register(PPRTuri)
 class PPRTuriAdmin(admin.ModelAdmin):
-    list_display = ('nomi','davriyligi',)
-    search_fields = ('nomi','davriyligi',)
+    list_display = ('nomi','davriyligi', 'qisqachanomi', 'kimlar_qiladi', 'comment')
+    search_fields = ('nomi','davriyligi','qisqachanomi', 'kimlar_qiladi', 'comment')
 
 
 # ObyektNomi

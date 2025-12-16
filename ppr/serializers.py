@@ -718,6 +718,11 @@ class PPRTuriSerializer(serializers.ModelSerializer):
     class Meta:
         model = PPRTuri
         fields = "__all__"
+        
+    def create(self, validated_data):
+            user = self.context['request'].user
+            validated_data['user'] = user
+            return super().create(validated_data)
 
 
 class ObyektNomiSerializer(serializers.ModelSerializer):
@@ -728,14 +733,27 @@ class ObyektNomiSerializer(serializers.ModelSerializer):
 
 class PPRJadvalSerializer(serializers.ModelSerializer):
     obyekt = serializers.PrimaryKeyRelatedField(queryset=ObyektNomi.objects.all())
-    ppr_turi = serializers.PrimaryKeyRelatedField(queryset=PPRTuri.objects.all())
+    ppr_turi = serializers.PrimaryKeyRelatedField(queryset=PPRTuri.objects.none())
     ppr_davriyligi = serializers.CharField(source='ppr_turi.davriyligi', read_only=True)
     obyekt_name = serializers.CharField(source='obyekt.obyekt_nomi', read_only=True)
     ppr_turi_name = serializers.CharField(source='ppr_turi.nomi', read_only=True)
     class Meta:
         model = PPRJadval
-        fields = ['id', 'oy', 'obyekt', 'ppr_turi', 'kim_tomonidan','obyekt_name', 'ppr_turi_name', 'ppr_davriyligi']
+        fields = ['id', 'oy','sana', 'obyekt', 'ppr_turi', 'kim_tomonidan','obyekt_name', 'ppr_turi_name', 'ppr_davriyligi']
 
+    def update(self, instance, validated_data):
+        if instance.tasdiqlangan:
+            raise serializers.ValidationError("Tasdiqlangan jadvalni tahrirlash mumkin emas!")
+        return super().update(instance, validated_data)
+
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        user = self.context['request'].user
+        if user and not user.is_anonymous:
+            # Faqat login qilgan foydalanuvchining PPRTuri larini ko‘rsatish
+            self.fields['ppr_turi'].queryset = PPRTuri.objects.filter(user=user)
+            
 
 class HujjatlarSerializer(serializers.ModelSerializer):
     class Meta:

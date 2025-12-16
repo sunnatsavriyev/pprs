@@ -380,6 +380,7 @@ class ArizaImageDeleteAPIView(APIView):
 class PPRTuriViewSet(viewsets.ModelViewSet):
     queryset = PPRTuri.objects.all()
     serializer_class = PPRTuriSerializer
+    
 
 
 class ObyektNomiViewSet(viewsets.ModelViewSet):
@@ -391,8 +392,57 @@ class ObyektNomiViewSet(viewsets.ModelViewSet):
 class PPRJadvalViewSet(viewsets.ModelViewSet):
     queryset = PPRJadval.objects.all()
     serializer_class = PPRJadvalSerializer
-    pagination_class = CustomPagination
 
+    @action(detail=False, methods=['post'])
+    def create_jadval(self, request):
+        if PPRJadval.objects.filter(tasdiqlangan=True).exists():
+            return Response(
+                {"detail": "Tasdiqlangan jadval mavjud. Yangi jadval qo‘shib bo‘lmaydi."},
+                status=400
+            )
+
+        jadval_type = request.data.get("jadval_type")
+        obyektlar = ObyektNomi.objects.all()
+        ppr_turlari = PPRTuri.objects.filter(user=request.user)
+
+        if jadval_type == "yillik":
+            oylar = [
+                "Yanvar", "Fevral", "Mart", "Aprel", "May", "Iyun",
+                "Iyul", "Avgust", "Sentabr", "Oktabr", "Noyabr", "Dekabr"
+            ]
+
+            for oy in oylar:
+                for obyekt in obyektlar:
+                    for ppr in ppr_turlari:
+                        PPRJadval.objects.create(
+                            oy=oy,
+                            obyekt=obyekt,
+                            ppr_turi=ppr
+                        )
+
+        elif jadval_type == "oylik":
+            oy = request.data.get("oy")
+            kunlar = request.data.get("kunlar")  # list of dates
+
+            if not oy or not kunlar:
+                return Response(
+                    {"detail": "Oylik jadval uchun oy va kunlar majburiy"},
+                    status=400
+                )
+
+            for sana in kunlar:
+                for obyekt in obyektlar:
+                    for ppr in ppr_turlari:
+                        PPRJadval.objects.create(
+                            oy=oy,
+                            sana=sana,
+                            obyekt=obyekt,
+                            ppr_turi=ppr
+                        )
+        else:
+            return Response({"detail": "Noto‘g‘ri jadval turi"}, status=400)
+
+        return Response({"detail": "Jadval muvaffaqiyatli yaratildi"}, status=201)
 
 class HujjatlarViewSet(viewsets.ModelViewSet):
     queryset = Hujjatlar.objects.all()
