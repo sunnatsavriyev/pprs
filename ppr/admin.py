@@ -79,26 +79,36 @@ class KelganArizalarAdmin(admin.ModelAdmin):
 
 @admin.register(PPRTuri)
 class PPRTuriAdmin(admin.ModelAdmin):
-    list_display = ('nomi','davriyligi', 'qisqachanomi', 'kimlar_qiladi', 'comment')
-    search_fields = ('nomi','davriyligi','qisqachanomi', 'kimlar_qiladi', 'comment')
+    list_display = ('nomi','davriyligi', 'vaqti', 'qisqachanomi', 'kimlar_qiladi', 'comment')
+    search_fields = ('nomi','davriyligi','vaqti', 'qisqachanomi', 'kimlar_qiladi', 'comment')
 
 
 # ObyektNomi
 
 @admin.register(ObyektNomi)
 class ObyektNomiAdmin(admin.ModelAdmin):
-    list_display = ('obyekt_nomi',)
-    search_fields = ('obyekt_nomi',)
+    list_display = ('obyekt_nomi','toliq_nomi',)
+    search_fields = ('obyekt_nomi','toliq_nomi',)
 
+
+
+@admin.register(ObyektLocation)
+class ObyektLocationAdmin(admin.ModelAdmin):    
+    list_display = ('obyekt', 'lat', 'lng', 'created_at')
 
 # PPRJadval
 
 @admin.register(PPRJadval)
 class PPRJadvalAdmin(admin.ModelAdmin):
-    list_display = ('oy', 'obyekt', 'ppr_turi', 'kim_tomonidan',)
+    list_display = ('oy', 'obyekt', 'ppr_turi','comment', 'tasdiqlangan', 'boshlash_sanasi', 'yakunlash_sanasi',)
     list_filter = ('oy',)
-    search_fields = ('obyekt__obyekt_nomi', 'ppr_turi__nomi', 'kim_tomonidan',)
+    search_fields = ('obyekt__obyekt_nomi', 'ppr_turi__nomi',)
 
+
+
+@admin.register(PPRYakunlash)
+class PPRYakunlashAdmin(admin.ModelAdmin):
+    list_display = ('yakunlash',)
 
 # Hujjatlar
 

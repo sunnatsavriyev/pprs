@@ -11,9 +11,11 @@ router.register("kelgan-arizalar", KelganArizalarViewSet, basename="kelgan-ariza
 router.register("kelgan-arizalar-create", KelganArizalarCreateViewSet, basename="kelgan-arizalar-create")  
 router.register("ppr-turi", PPRTuriViewSet)
 router.register("obyekt", ObyektNomiViewSet)
+router.register('obyekt-locations', ObyektLocationViewSet)
 router.register("ppr-jadval", PPRJadvalViewSet)
 router.register("hujjatlar", HujjatlarViewSet)
 router.register("notifications", NotificationsViewSet, basename="notifications")
+router.register("yakunlash", PPRYakunlashViewSet, basename="yakunlash")
 
 
 urlpatterns = [

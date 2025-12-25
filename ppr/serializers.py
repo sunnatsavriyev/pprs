@@ -11,28 +11,43 @@ def generate_unique_passport():
 
 
 
-ALLOWED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".heic", ".heif"]
+ALLOWED_EXTENSIONS = [
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".heic",
+    ".heif",
+    ".avif",
+]
 
 def validate_image_format(image):
     ext = os.path.splitext(image.name)[1].lower()
     content_type = image.content_type.lower()
 
-    allowed_ext = [".jpg", ".jpeg", ".png", ".heic", ".heif"]
+    allowed_ext = [
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".heic",
+        ".heif",
+        ".avif",
+    ]
+
     allowed_mime = [
         "image/jpeg",
         "image/png",
         "image/heic",
         "image/heif",
-        "application/octet-stream",  
+        "image/avif",                 # ✅ AVIF qo‘shildi
+        "application/octet-stream",   # baʼzi brauzerlar
         "binary/octet-stream"
     ]
 
     if ext not in allowed_ext and content_type not in allowed_mime:
         raise serializers.ValidationError(
             f"Rasm formati qo‘llab-quvvatlanmaydi! ({content_type} / {ext}). "
-            "Faqat JPG, JPEG, PNG, HEIC, HEIF formatlari ruxsat etiladi."
+            "Faqat JPG, JPEG, PNG, HEIC, HEIF, AVIF formatlari ruxsat etiladi."
         )
-
 
 
 class UserTuzilmaSerializer(serializers.ModelSerializer):
@@ -715,20 +730,79 @@ class ArizaStatusUpdateSerializer(serializers.Serializer):
 
 
 class PPRTuriSerializer(serializers.ModelSerializer):
+    
+    user = serializers.HiddenField(
+        default=serializers.CurrentUserDefault()
+    )
     class Meta:
         model = PPRTuri
         fields = "__all__"
         
-    def create(self, validated_data):
-            user = self.context['request'].user
-            validated_data['user'] = user
-            return super().create(validated_data)
+        extra_kwargs = {
+            'nomi': {'required': True},
+            'qisqachanomi': {'required': True},
+            'davriyligi': {'required': True},
+            'vaqti': {'required': True},
+            'comment': {'required': True},
+            'file': {'required': False},
+            'kimlar_qiladi': {'required': True},
+        }
+        
+        
+    
+    def update(self, instance, validated_data):
+        # Fayl mavjud bo'lmasa yoki None bo'lsa, eski faylni saqlaymiz
+        file_value = validated_data.get('file', instance.file)
+        if file_value is None:
+            validated_data['file'] = instance.file
 
+        return super().update(instance, validated_data)
 
+        
+    # def create(self, validated_data):
+    #         user = self.context['request'].user
+    #         validated_data['user'] = user
+    #         return super().create(validated_data)
+
+class ObyektLocationSerializer(serializers.ModelSerializer):
+    obyekt_name = serializers.CharField(
+        source='obyekt.obyekt_nomi',
+        read_only=True
+    )
+
+    class Meta:
+        model = ObyektLocation
+        fields = ['id', 'obyekt', 'obyekt_name', 'lat', 'lng', 'created_at']
+        extra_kwargs = {
+            'obyekt': {'required': True}  
+        }
+
+    def get_fields(self):
+        fields = super().get_fields()
+        request = self.context.get('request')
+
+        # PUT/PATCH da obyekt umuman o‘chadi
+        if request and request.method in ['PUT', 'PATCH']:
+            fields.pop('obyekt')
+
+        return fields
+        
+        
+        
+        
 class ObyektNomiSerializer(serializers.ModelSerializer):
+    location = ObyektLocationSerializer(read_only=True)
+    
+    
     class Meta:
         model = ObyektNomi
-        fields = "__all__"
+        fields = ['id', 'obyekt_nomi', 'toliq_nomi', 'location']
+
+
+
+
+
+
 
 
 class PPRJadvalSerializer(serializers.ModelSerializer):
@@ -739,8 +813,49 @@ class PPRJadvalSerializer(serializers.ModelSerializer):
     ppr_turi_name = serializers.CharField(source='ppr_turi.nomi', read_only=True)
     class Meta:
         model = PPRJadval
-        fields = ['id', 'oy','sana', 'obyekt', 'ppr_turi', 'kim_tomonidan','obyekt_name', 'ppr_turi_name', 'ppr_davriyligi']
+        fields = ['id', 'oy','boshlash_sanasi', 'yakunlash_sanasi', 'obyekt', 'ppr_turi', 'obyekt_name', 'ppr_turi_name', 'ppr_davriyligi','comment', ]
 
+    
+    
+    
+    def validate(self, attrs):
+        oy = attrs.get("oy")
+        start = attrs.get("boshlash_sanasi")
+        end = attrs.get("yakunlash_sanasi")
+
+        # ❌ Oy va sana bir vaqtda bo‘lmasin
+        if oy and (start or end):
+            raise serializers.ValidationError(
+                "Agar oy tanlansa, boshlash/yakunlash sanasi kiritilmaydi."
+            )
+
+        if (start or end) and oy:
+            raise serializers.ValidationError(
+                "Agar sana tanlansa, oy tanlanmaydi."
+            )
+
+        # ❌ Sana to‘liq bo‘lishi shart
+        if start and not end:
+            raise serializers.ValidationError(
+                "Yakunlash sanasi majburiy."
+            )
+
+        if end and not start:
+            raise serializers.ValidationError(
+                "Boshlash sanasi majburiy."
+            )
+
+        # ❌ Sana mantiqi
+        if start and end and start > end:
+            raise serializers.ValidationError(
+                "Boshlash sanasi yakunlash sanasidan katta bo‘lmasligi kerak."
+            )
+
+        return attrs
+    
+    
+    
+    
     def update(self, instance, validated_data):
         if instance.tasdiqlangan:
             raise serializers.ValidationError("Tasdiqlangan jadvalni tahrirlash mumkin emas!")
@@ -749,10 +864,24 @@ class PPRJadvalSerializer(serializers.ModelSerializer):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        user = self.context['request'].user
-        if user and not user.is_anonymous:
-            # Faqat login qilgan foydalanuvchining PPRTuri larini ko‘rsatish
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+
+        if not user or user.is_anonymous:
+            self.fields['ppr_turi'].queryset = PPRTuri.objects.none()
+
+        elif user.is_superuser or getattr(user, 'role', None) == "admin":
+            self.fields['ppr_turi'].queryset = PPRTuri.objects.all()
+
+        else:
             self.fields['ppr_turi'].queryset = PPRTuri.objects.filter(user=user)
+            
+            
+
+class PPRJadvalYakunlashSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PPRYakunlash
+        fields = ['id', 'yakunlash']
             
 
 class HujjatlarSerializer(serializers.ModelSerializer):

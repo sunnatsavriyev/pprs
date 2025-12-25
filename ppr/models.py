@@ -278,7 +278,13 @@ class PPRTuri(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True)
     nomi = models.CharField(max_length=100, help_text="Masalan: Nomi", null=True, blank=True)
     qisqachanomi = models.CharField(max_length=100, help_text="Masalan: Qisqa nomi", null=True, blank=True)
-    davriyligi = models.CharField(max_length=100, help_text="Masalan: qancha vaqtda", null=True, blank=True)
+    davriyligi = models.IntegerField(max_length=100, help_text="Masalan: qancha vaqtda", null=True, blank=True)
+    VaqtiChoises = (
+        ("soat", "soat"),
+        ("kun", "kun"),
+        ("oy", "oy"),
+    )
+    vaqti = models.CharField(max_length=100,choices=VaqtiChoises, null=True, blank=True)
     comment = models.TextField(null=True, blank=True)
     file = models.FileField(upload_to='ppr_turlari/', null=True, blank=True)
     kimlar_qiladi = models.CharField(max_length=255, null=True, blank=True)
@@ -289,9 +295,25 @@ class PPRTuri(models.Model):
 
 class ObyektNomi(models.Model):
     obyekt_nomi = models.CharField(max_length=255)
+    toliq_nomi = models.TextField()
 
     def __str__(self):
         return self.obyekt_nomi
+
+
+
+class ObyektLocation(models.Model):
+    obyekt = models.OneToOneField(
+        ObyektNomi,
+        on_delete=models.CASCADE,
+        related_name='location'
+    )
+    lat = models.DecimalField(max_digits=9, decimal_places=6)
+    lng = models.DecimalField(max_digits=9, decimal_places=6)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.obyekt.obyekt_nomi} ({self.lat}, {self.lng})"
 
 
 class PPRJadval(models.Model):
@@ -309,16 +331,13 @@ class PPRJadval(models.Model):
         ("Noyabr", "Noyabr"),
         ("Dekabr", "Dekabr"),
     )
-    Choose_kim = (
-        ("Texnik", "Texnik"),
-        ("AKT_xodimi", "AKT_xodimi"),
-        )
-    oy = models.CharField(max_length=20, choices=Choose_oy)
-    sana = models.DateField(null=True, blank=True)
+    
+    oy = models.CharField(max_length=20, choices=Choose_oy, null=True, blank=True)
+    boshlash_sanasi = models.DateField(null=True, blank=True)
+    yakunlash_sanasi = models.DateField(null=True, blank=True)
     obyekt = models.ForeignKey(ObyektNomi, on_delete=models.CASCADE)
     ppr_turi = models.ForeignKey(PPRTuri, on_delete=models.CASCADE)
-    kim_tomonidan = models.CharField(max_length=255, null=True, blank=True, choices=Choose_kim)
-    
+    comment = models.TextField(null=True, blank=True)
     tasdiqlangan = models.BooleanField(default=False)
 
     def save(self, *args, **kwargs):
@@ -328,6 +347,12 @@ class PPRJadval(models.Model):
 
     def __str__(self):
         return f"{self.oy} - {self.obyekt}"
+
+
+class PPRYakunlash(models.Model):
+    yakunlash = models.BooleanField(default=False)
+    
+    
 
 
 

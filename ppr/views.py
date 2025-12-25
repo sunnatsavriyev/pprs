@@ -13,7 +13,7 @@ from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 
@@ -136,8 +136,10 @@ class ArizaYuborishViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        if user.is_superuser:
+        # Superuser yoki admin barcha arizalarni ko‘radi
+        if user.is_superuser or (hasattr(user, 'role') and user.role == "admin"):
             return ArizaYuborish.objects.all().order_by('-id')
+        # Oddiy foydalanuvchi faqat o‘zini ko‘radi
         return ArizaYuborish.objects.filter(created_by=user).order_by('-id')
 
     def perform_create(self, serializer):
@@ -191,7 +193,7 @@ class KelganArizalarViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
 
-        if user.is_superuser:
+        if user.is_superuser or getattr(user, 'role', None) == "admin":
             return ArizaYuborish.objects.prefetch_related(
                 Prefetch('kelganlar', queryset=KelganArizalar.objects.all())
             ).order_by('-id')
@@ -229,7 +231,10 @@ class KelganArizalarViewSet(viewsets.ModelViewSet):
         comment = serializer.validated_data.get('comment', '')
 
         user = request.user
-        if not user.is_superuser and ariza.tuzilma != getattr(user, 'tarkibiy_tuzilma', None):
+        
+        
+        is_admin = getattr(user, 'role', None) == 'admin'
+        if not (user.is_superuser or is_admin or ariza.tuzilma == getattr(user, 'tarkibiy_tuzilma', None)):
             return Response({"detail": "Ruxsat yo‘q"}, status=403)
 
         ariza.status = holat
@@ -278,7 +283,7 @@ class KelganArizalarCreateViewSet(viewsets.ModelViewSet):
         user = self.request.user
         qs = KelganArizalar.objects.all()
         
-        if user.is_superuser:
+        if user.is_superuser or getattr(user, 'role', None) == "admin":
             return qs
         elif user.tarkibiy_tuzilma:
             return qs.filter(ariza__tuzilma=user.tarkibiy_tuzilma)
@@ -378,33 +383,109 @@ class ArizaImageDeleteAPIView(APIView):
 
             
 class PPRTuriViewSet(viewsets.ModelViewSet):
-    queryset = PPRTuri.objects.all()
+    queryset = PPRTuri.objects.all().order_by('-id')
     serializer_class = PPRTuriSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        user = self.request.user
+
+        if user.is_superuser or getattr(user, 'role', None) == "admin":
+            return PPRTuri.objects.all().order_by('-id')
+
+        return PPRTuri.objects.filter(user=user).order_by('-id')
     
 
 
 class ObyektNomiViewSet(viewsets.ModelViewSet):
-    queryset = ObyektNomi.objects.all()
+    queryset = ObyektNomi.objects.all().order_by('-id')
     serializer_class = ObyektNomiSerializer
     pagination_class = CustomPagination
+    search_fields = ['obyekt_nomi']
+    filter_backends = [filters.SearchFilter]
+    permission_classes = [permissions.IsAuthenticated]
+
+
+
+class ObyektLocationViewSet(viewsets.ModelViewSet):
+    queryset = ObyektLocation.objects.all().order_by('-id')
+    serializer_class = ObyektLocationSerializer
+    pagination_class = CustomPagination
+    permission_classes = [permissions.IsAuthenticated]
+
+    def create(self, request, *args, **kwargs):
+        obyekt_id = request.data.get('obyekt')
+
+        if not obyekt_id:
+            return Response(
+                {"detail": "obyekt majburiy"},
+                status=400
+            )
+
+        if ObyektLocation.objects.filter(obyekt_id=obyekt_id).exists():
+            return Response(
+                {"detail": "Bu obyekt uchun locatsiya allaqachon mavjud"},
+                status=400
+            )
+
+        return super().create(request, *args, **kwargs)
+
 
 
 class PPRJadvalViewSet(viewsets.ModelViewSet):
-    queryset = PPRJadval.objects.all()
     serializer_class = PPRJadvalSerializer
+    queryset = PPRJadval.objects.all()
+    permission_classes = [permissions.IsAuthenticated]
 
-    @action(detail=False, methods=['post'])
+    
+    def get_queryset(self):
+        user = self.request.user
+        queryset = PPRJadval.objects.all()
+
+        if not (user.is_superuser or getattr(user, 'role', None) == "admin"):
+            queryset = queryset.filter(ppr_turi__user=user)
+
+        return queryset.order_by('-id')
+
+    
+    @action(detail=False, methods=['get'], url_path='yillik')
+    def yillik_jadval(self, request):
+        queryset = self.get_queryset().filter(boshlash_sanasi__isnull=True)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    
+    @action(detail=False, methods=['get'], url_path='oylik')
+    def oylik_jadval(self, request):
+        queryset = self.get_queryset().filter(boshlash_sanasi__isnull=False)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    # =======================
+    # JADVAL YARATISH (YILLIK / OYLIK)
+    # =======================
+    @action(detail=False, methods=['post'], url_path='create-jadval')
     def create_jadval(self, request):
+        # Agar tasdiqlangan jadval bo‘lsa, yangi yaratib bo‘lmaydi
         if PPRJadval.objects.filter(tasdiqlangan=True).exists():
             return Response(
                 {"detail": "Tasdiqlangan jadval mavjud. Yangi jadval qo‘shib bo‘lmaydi."},
-                status=400
+                status=status.HTTP_400_BAD_REQUEST
             )
 
         jadval_type = request.data.get("jadval_type")
         obyektlar = ObyektNomi.objects.all()
         ppr_turlari = PPRTuri.objects.filter(user=request.user)
 
+        if not ppr_turlari.exists():
+            return Response(
+                {"detail": "Sizga tegishli PPR turlari topilmadi"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # -------- YILLIK JADVAL --------
         if jadval_type == "yillik":
             oylar = [
                 "Yanvar", "Fevral", "Mart", "Aprel", "May", "Iyun",
@@ -416,21 +497,54 @@ class PPRJadvalViewSet(viewsets.ModelViewSet):
                     for ppr in ppr_turlari:
                         PPRJadval.objects.create(
                             oy=oy,
+                            sana=None,
                             obyekt=obyekt,
                             ppr_turi=ppr
                         )
 
+        # -------- OYLIK JADVAL --------
         elif jadval_type == "oylik":
             oy = request.data.get("oy")
-            kunlar = request.data.get("kunlar")  # list of dates
+            kunlar = request.data.get("kunlar")  # eski variant
+            boshlanish = request.data.get("boshlanish_sana")
+            yakunlash = request.data.get("yakunlash_sana")
 
-            if not oy or not kunlar:
+            # ❌ oy + sana oralig‘i birga bo‘lmasin
+            if oy and (boshlanish or yakunlash):
                 return Response(
-                    {"detail": "Oylik jadval uchun oy va kunlar majburiy"},
-                    status=400
+                    {"detail": "Oy tanlanganda boshlanish/yakunlash sana kiritilmaydi"},
+                    status=status.HTTP_400_BAD_REQUEST
                 )
 
-            for sana in kunlar:
+            # ❌ sana oralig‘i to‘liq bo‘lishi shart
+            if (boshlanish and not yakunlash) or (yakunlash and not boshlanish):
+                return Response(
+                    {"detail": "Boshlanish va yakunlash sanasi birga kiritilishi shart"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            sanalar = []
+
+            # ✅ 1️⃣ Sana oralig‘i bo‘yicha
+            if boshlanish and yakunlash:
+                current = boshlanish
+                while current <= yakunlash:
+                    sanalar.append(current)
+                    current += timedelta(days=1)
+
+                oy = boshlanish.strftime("%B")
+
+            # ✅ 2️⃣ Eski variant (oy + kunlar)
+            elif oy and kunlar:
+                sanalar = kunlar
+
+            else:
+                return Response(
+                    {"detail": "Oy + kunlar yoki boshlanish/yakunlash sana kiritilishi shart"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            for sana in sanalar:
                 for obyekt in obyektlar:
                     for ppr in ppr_turlari:
                         PPRJadval.objects.create(
@@ -439,11 +553,27 @@ class PPRJadvalViewSet(viewsets.ModelViewSet):
                             obyekt=obyekt,
                             ppr_turi=ppr
                         )
+
         else:
-            return Response({"detail": "Noto‘g‘ri jadval turi"}, status=400)
+            return Response(
+                {"detail": "Noto‘g‘ri jadval turi (yillik yoki oylik bo‘lishi kerak)"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        return Response({"detail": "Jadval muvaffaqiyatli yaratildi"}, status=201)
-
+        return Response(
+            {"detail": "Jadval muvaffaqiyatli yaratildi"},
+            status=status.HTTP_201_CREATED
+        )
+      
+      
+      
+      
+      
+        
+class PPRYakunlashViewSet(viewsets.ModelViewSet):
+    queryset = PPRYakunlash.objects.all()
+    serializer_class = PPRJadvalYakunlashSerializer  
+    
 class HujjatlarViewSet(viewsets.ModelViewSet):
     queryset = Hujjatlar.objects.all()
     serializer_class = HujjatlarSerializer
