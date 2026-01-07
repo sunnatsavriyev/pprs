@@ -19,3 +19,16 @@ class IsTarkibiy(permissions.BasePermission):
 class IsBekat(permissions.BasePermission):
     def has_permission(self, request, view):
         return request.user.is_authenticated and request.user.role == "bekat"
+
+
+class IsBolim(permissions.BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.role == "bolim"
+    
+    
+class IsMonitoring(permissions.BasePermission):
+    def has_permission(self, request, view):
+        return (
+            request.user.is_authenticated and
+            request.user.role == "monitoring"
+        )

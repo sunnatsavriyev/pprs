@@ -6,8 +6,10 @@ from django.conf import settings
 class CustomUser(AbstractUser):
     ROLE_CHOICES = (
         ("admin", "Admin"),
+        ("monitoring", "Monitoring"),
         ("tarkibiy", "Tarkibiy Tuzilma Rahbari"),
         ("bekat", "Bekat Rahbari"),
+        ("bolim", "Bo'lim Boshlig'i"),
     )
 
     role = models.CharField(max_length=20, choices=ROLE_CHOICES)
@@ -25,7 +27,20 @@ class CustomUser(AbstractUser):
         null=True,
         related_name='users'
     )
-    
+    bolim = models.ForeignKey(
+        'Bolim',
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='users'
+    )
+    monitoring = models.ForeignKey(
+        'Monitoring',
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='users'
+    )
     photo = models.ImageField(upload_to='admin_photos/', blank=True, null=True)
     birth_date = models.DateField(blank=True, null=True)
     passport_seriya = models.CharField(max_length=9, blank=True, null=True)
@@ -55,6 +70,13 @@ class CustomUser(AbstractUser):
 
     def is_bekat(self):
         return self.role == "bekat"
+    
+    def is_bolim(self):
+        return self.role == "bolim"
+    
+    
+    def is_monitoring(self):
+        return self.role == "monitoring"
 
 
 
@@ -144,7 +166,21 @@ class Bekat(models.Model):
         return self.bekat_nomi
 
 
+class Monitoring(models.Model):
+    faoliyati = models.TextField()
+    rahbari = models.CharField(max_length=255)
+    photo = models.ImageField(upload_to='monitoring_photos/', blank=True, null=True)
+    birth_date = models.DateField(blank=True, null=True)
+    passport_seriya = models.CharField(max_length=9, blank=True, null=True)
+    # email aslida AbstractUser da mavjud, lekin agar null=True kerak bo'lsa:
+    email = models.EmailField(blank=True, null=True)
+    status = models.BooleanField(default=True)
+    
+    created_by = models.ForeignKey('CustomUser', on_delete=models.SET_NULL, null=True, related_name='monitoring_creator')
+    created_at = models.DateTimeField(auto_now_add=True)
 
+    def __str__(self):
+        return f"Monitoring | {self.rahbari}"
 
 
 
@@ -183,7 +219,29 @@ class TarkibiyTuzilma(models.Model):
 
 
 
+class Bolim(models.Model):
+    user = models.OneToOneField(
+        CustomUser, 
+        on_delete=models.CASCADE, 
+        related_name='bolim_profile', 
+        null=True, 
+        blank=True
+    )
+    tuzilma = models.ForeignKey(TarkibiyTuzilma, on_delete=models.CASCADE, related_name="bolimlar")
+    bolim_nomi = models.CharField(max_length=255)
+    faoliyati = models.TextField()
+    rahbari = models.CharField(max_length=255)
+    photo = models.ImageField(upload_to='bolim_photos/', blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+    birth_date = models.DateField(blank=True, null=True)
+    passport_seriya = models.CharField(max_length=9, blank=True, null=True)
+    status = models.BooleanField(default=True)
+    
+    created_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, related_name='bolim_creator')
+    created_at = models.DateTimeField(auto_now_add=True)
 
+    def __str__(self):
+        return f"{self.bolim_nomi} | {self.tuzilma.tuzilma_nomi}"
 
 
 
@@ -195,11 +253,15 @@ class ArizaYuborish(models.Model):
         ("qabul qilindi", "Qabul qilindi"),
         ("jarayonda", "Jarayonda"),
     )
-
-    tuzilma = models.ForeignKey(TarkibiyTuzilma, on_delete=models.CASCADE, related_name="arizalar")
+    TURI = (
+        ("ijro", "Ijro uchun"),
+        ("malumot", "Ma'lumot uchun"),
+    )
+    tuzilmalar = models.ManyToManyField(TarkibiyTuzilma, related_name="arizalar")
+    turi = models.CharField(max_length=15, choices=TURI, default="ijro")
+    ijro_muddati = models.DateField(null=True, blank=True)
     comment = models.TextField()
     sana = models.DateTimeField(auto_now_add=True)
-    # photo = models.ImageField(upload_to='ariza_rasmlari/', blank=True, null=True)
     kim_tomonidan = models.ForeignKey(
         CustomUser,
         on_delete=models.CASCADE,
@@ -293,6 +355,8 @@ class PPRTuri(models.Model):
         return self.nomi
 
 
+
+
 class ObyektNomi(models.Model):
     obyekt_nomi = models.CharField(max_length=255)
     toliq_nomi = models.TextField()
@@ -353,6 +417,17 @@ class PPRYakunlash(models.Model):
     yakunlash = models.BooleanField(default=False)
     
     
+class PPRBajarildi(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    jadval = models.ForeignKey('PPRJadval', on_delete=models.CASCADE, related_name='bajarildi')
+    comment = models.TextField(null=True, blank=True)
+    file = models.FileField(upload_to='ppr_bajarildi_files/', null=True, blank=True)
+    images = models.ImageField(upload_to='ppr_bajarildi_images/', null=True, blank=True)
+    created_at = models.DateField(auto_now_add=True)
+    created_time = models.TimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.user.username} - {self.jadval} - {self.created_at}"
 
 
 

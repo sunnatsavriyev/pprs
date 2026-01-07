@@ -12,6 +12,14 @@ class CustomUserAdmin(admin.ModelAdmin):
         ('Permissions', {'fields': ('is_staff','is_superuser','is_active')}),
     )
 
+
+
+@admin.register(Bolim)
+class BolimAdmin(admin.ModelAdmin):
+    list_display = ('bolim_nomi', 'tuzilma', 'rahbari', 'status', 'created_at')
+    list_filter = ('status',)
+    search_fields = ('bolim_nomi', 'tuzilma__tuzilma_nomi')
+
 # TarkibiyTuzilma
 
 @admin.register(TarkibiyTuzilma)
@@ -46,16 +54,12 @@ class ArizaYuborishImageInline(admin.TabularInline):
 
 @admin.register(ArizaYuborish)
 class ArizaYuborishAdmin(admin.ModelAdmin):
-    list_display = ('tuzilma', 'kim_tomonidan', 'status', 'created_by', 'is_approved', 'bildirgi')
-    readonly_fields = ('created_by', 'sana')
+    list_display = ('id', 'get_tuzilmalar', 'turi', 'status', 'sana', 'created_by')
     
+    def get_tuzilmalar(self, obj):
+        return ", ".join([t.tuzilma_nomi for t in obj.tuzilmalar.all()])
     
-    inlines = [ArizaYuborishImageInline]
-
-    def save_model(self, request, obj, form, change):
-        if not obj.pk:
-            obj.created_by = request.user
-        super().save_model(request, obj, form, change)
+    get_tuzilmalar.short_description = 'Tuzilmalar' 
 
 
 # KelganArizalar
@@ -79,8 +83,9 @@ class KelganArizalarAdmin(admin.ModelAdmin):
 
 @admin.register(PPRTuri)
 class PPRTuriAdmin(admin.ModelAdmin):
-    list_display = ('nomi','davriyligi', 'vaqti', 'qisqachanomi', 'kimlar_qiladi', 'comment')
-    search_fields = ('nomi','davriyligi','vaqti', 'qisqachanomi', 'kimlar_qiladi', 'comment')
+    list_display = ('nomi','davriyligi', 'vaqti', 'qisqachanomi', 'kimlar_qiladi', 'comment',)
+    search_fields = ('nomi','davriyligi','vaqti', 'qisqachanomi', 'kimlar_qiladi', 'comment',)
+
 
 
 # ObyektNomi

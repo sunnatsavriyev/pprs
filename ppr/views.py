@@ -13,24 +13,53 @@ from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
-from datetime import datetime, timedelta
-
-
+from datetime import date, timedelta
+from rest_framework.filters import SearchFilter, OrderingFilter
+from django.db.models import Q
+from django.utils import timezone
 
 class UserTuzilmaViewSet(viewsets.ModelViewSet):
     serializer_class = UserTuzilmaSerializer
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
+    pagination_class = CustomPagination
+    filter_backends = [
+        DjangoFilterBackend,
+        filters.SearchFilter,
+        filters.OrderingFilter,
+    ]
+    search_fields = [
+        "username",
+        "email",
+        "passport_seriya",
+        "role",
+        "tarkibiy_tuzilma__tuzilma_nomi",
+        "bekat_nomi__bekat_nomi",
+    ]
+    filterset_fields = {
+        "role": ["exact"],
+        "tarkibiy_tuzilma": ["exact"],
+        "bekat_nomi": ["exact"],
+        "is_active": ["exact"],
+    }
+    ordering_fields = ["id", "username", "date_joined"]
+    ordering = ["-id"]
 
     def get_queryset(self):
         user = self.request.user
 
-        if user.is_superuser or user.is_admin():
-            # Adminlar va superuser barcha foydalanuvchilarni ko‘radi
+        # ADMIN, SUPERUSER, MONITORING → hammani ko‘radi
+        if user.is_superuser or user.role in ["admin", "monitoring"]:
             return CustomUser.objects.all().order_by('-id')
-        else:
-            # Foydalanuvchi faqat o‘zini ko‘radi
-            return CustomUser.objects.filter(id=user.id)
+        
+        
+        if user.role == "tarkibiy":
+            return CustomUser.objects.filter(
+                Q(id=user.id) |                    
+                Q(tarkibiy_tuzilma=user.tarkibiy_tuzilma)
+            )
+
+        return CustomUser.objects.filter(id=user.id)
 
     # CREATE – faqat admin/superuser
     def perform_create(self, serializer):
@@ -39,6 +68,20 @@ class UserTuzilmaViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("Faqat admin foydalanuvchi yaratishi mumkin.")
         serializer.save()
 
+    
+    
+    def get_permissions(self):
+        user = self.request.user
+
+        # Monitoring faqat GET
+        if user.role == "monitoring":
+            if self.request.method not in permissions.SAFE_METHODS:
+                raise PermissionDenied("Monitoring faqat ko‘rishi mumkin")
+        
+        return super().get_permissions()
+    
+    
+    
     # ---------------- UPDATE ----------------
     def perform_update(self, serializer):
         user = self.request.user
@@ -58,13 +101,53 @@ class UserTuzilmaViewSet(viewsets.ModelViewSet):
     # ---------------- DELETE ----------------
     def perform_destroy(self, instance):
         user = self.request.user
+
+        # Faqat admin / superuser
         if not (user.is_superuser or user.is_admin()):
             raise PermissionDenied("Faqat admin foydalanuvchi o‘chirishi mumkin.")
+
+        # -------- 24 SOATLIK CHEK --------
+        created_time = instance.date_joined
+        now = timezone.now()
+
+        if now - created_time > timedelta(hours=24):
+            raise PermissionDenied(
+                "Bu foydalanuvchini o‘chirish mumkin emas. "
+                "Foydalanuvchi yaratilganidan 24 soat o‘tgan."
+            )
+
         instance.delete()
 
 
 
+class BolimViewSet(viewsets.ModelViewSet):
+    serializer_class = BolimUserSerializer
+    permission_classes = [permissions.IsAuthenticated] 
 
+    def get_queryset(self):
+        user = self.request.user
+
+        # ADMIN / SUPERUSER / MONITORING → hammasi
+        if user.is_superuser or user.role in ["admin", "monitoring"]:
+            return Bolim.objects.all().order_by('-id')
+
+        if user.role == "tarkibiy":
+            return Bolim.objects.filter(tuzilma=user.tarkibiy_tuzilma)
+
+        if user.role == "bolim":
+            return Bolim.objects.filter(user=user)
+
+        return Bolim.objects.none()  
+        
+    def get_permissions(self):
+        user = self.request.user
+
+        if user.role == "monitoring":
+            if self.request.method not in permissions.SAFE_METHODS:
+                raise PermissionDenied("Monitoring faqat ko‘rishi mumkin")
+
+        return super().get_permissions()
+    
 
 class MeAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -127,8 +210,8 @@ class ArizaYuborishViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter, DjangoFilterBackend]
 
-    search_fields = ['status', 'tuzilma__tuzilma_nomi', 'created_by__username', 'comment']
-    ordering_fields = ['id', 'tuzilma__tuzilma_nomi', 'created_by__username']
+    search_fields = ['status', 'tuzilmalar__tuzilma_nomi', 'created_by__username', 'comment']
+    ordering_fields = ['id', 'tuzilmalar__tuzilma_nomi', 'created_by__username']
     # filterset_fields = ['status', 'is_approved']
     filterset_class = ArizaYuborishFilter
 
@@ -136,10 +219,16 @@ class ArizaYuborishViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        # Superuser yoki admin barcha arizalarni ko‘radi
-        if user.is_superuser or (hasattr(user, 'role') and user.role == "admin"):
+        if user.is_superuser or getattr(user, 'role', None) == "admin":
             return ArizaYuborish.objects.all().order_by('-id')
-        # Oddiy foydalanuvchi faqat o‘zini ko‘radi
+        
+        # Qaysi tuzilmalar ro'yxatida foydalanuvchining tuzilmasi bo'lsa, o'shani ko'radi
+        # Yoki o'zi yaratgan arizalarni ko'radi
+        if user.tarkibiy_tuzilma:
+            return ArizaYuborish.objects.filter(
+                models.Q(created_by=user) | models.Q(tuzilmalar=user.tarkibiy_tuzilma)
+            ).distinct().order_by('-id')
+        
         return ArizaYuborish.objects.filter(created_by=user).order_by('-id')
 
     def perform_create(self, serializer):
@@ -436,6 +525,36 @@ class PPRJadvalViewSet(viewsets.ModelViewSet):
     serializer_class = PPRJadvalSerializer
     queryset = PPRJadval.objects.all()
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = CustomPagination
+    filter_backends = [
+        DjangoFilterBackend,
+        SearchFilter,
+        OrderingFilter,
+    ]
+
+    filterset_fields = {
+        'oy': ['exact'],
+        'obyekt': ['exact'],
+        'ppr_turi': ['exact'],
+        'tasdiqlangan': ['exact'],
+        'boshlash_sanasi': ['gte'],
+        'yakunlash_sanasi': ['lte'],
+    }
+
+    search_fields = [
+        'obyekt__obyekt_nomi',
+        'ppr_turi__nomi',
+        'ppr_turi__qisqachanomi',
+        'comment',
+    ]
+
+    ordering_fields = [
+        'id',
+        'oy',
+        'boshlash_sanasi',
+        'yakunlash_sanasi',
+    ]
+    ordering = ['-id']
 
     
     def get_queryset(self):
@@ -567,7 +686,25 @@ class PPRJadvalViewSet(viewsets.ModelViewSet):
       
       
       
-      
+class PPRBajarildiViewSet(viewsets.ModelViewSet):
+    serializer_class = PPRBajarildiSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        # Faqat o'z userining bajarilgan PPRlarini ko‘rsatish
+        return PPRBajarildi.objects.filter(user=user).order_by('-created_at', '-created_time')
+
+    def perform_create(self, serializer):
+        jadval = serializer.validated_data['jadval']
+
+        if jadval.boshlash_sanasi is None:
+            raise serializers.ValidationError("Faqat oylik jadval elementlarini bajarildi deb belgilash mumkin!")
+
+        if PPRBajarildi.objects.filter(user=self.request.user, jadval=jadval).exists():
+            raise serializers.ValidationError("Siz bu PPRni allaqachon bajarildi deb belgilagansiz!")
+
+        serializer.save(user=self.request.user)     
       
         
 class PPRYakunlashViewSet(viewsets.ModelViewSet):
@@ -580,35 +717,59 @@ class HujjatlarViewSet(viewsets.ModelViewSet):
     pagination_class = CustomPagination
 
 
+
+MONTHS_UZ = {
+    1: "Yanvar",
+    2: "Fevral",
+    3: "Mart",
+    4: "Aprel",
+    5: "May",
+    6: "Iyun",
+    7: "Iyul",
+    8: "Avgust",
+    9: "Sentabr",
+    10: "Oktabr",
+    11: "Noyabr",
+    12: "Dekabr",
+}
+
+
 class NotificationsViewSet(viewsets.ReadOnlyModelViewSet):
-    
-    serializer_class = NotificationsSerializer
+    serializer_class = PPRJadvalSerializer
     permission_classes = [IsAuthenticated]
 
     def list(self, request, *args, **kwargs):
-        # Hozirgi oy
-        current_month = datetime.now().month  
+        today = date.today()
+        current_month_num = today.month
+        current_month_name = MONTHS_UZ[current_month_num]
         user = request.user
 
-        ppr_this_month = PPRJadval.objects.filter(
-            oy=current_month,
-            kim_tomonidan=user
+        queryset = PPRJadval.objects.all()
+
+        # oddiy user faqat o‘ziga tegishli PPRlarni ko‘rsin
+        if not (user.is_superuser or getattr(user, 'role', None) == "admin"):
+            queryset = queryset.filter(ppr_turi__user=user)
+
+       
+        today_ppr = queryset.filter(
+            boshlash_sanasi=today
         )
 
-        # Agar PPR yo‘q bo‘lsa
-        if not ppr_this_month.exists():
-            return Response(
-                {"message": "Ushbu oyda PPR topilmadi."},
-                status=status.HTTP_200_OK
-            )
-
-        # Natijalarni serializer qilish
-        serialized = PPRJadvalSerializer(ppr_this_month, many=True).data
+        monthly_ppr = queryset.filter(
+            Q(boshlash_sanasi__month=current_month_num) |
+            Q(oy=current_month_name)
+        )
 
         return Response(
             {
-                "message": f"Bu oyda siz bajarishingiz kerak bo‘lgan {len(serialized)} ta PPR mavjud.",
-                "pprlar": serialized
+                "today": {
+                    "count": today_ppr.count(),
+                    "pprlar": PPRJadvalSerializer(today_ppr, many=True).data
+                },
+                "this_month": {
+                    "count": monthly_ppr.count(),
+                    "pprlar": PPRJadvalSerializer(monthly_ppr, many=True).data
+                }
             },
             status=status.HTTP_200_OK
         )
