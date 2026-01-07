@@ -65,7 +65,7 @@ class UserTuzilmaSerializer(serializers.ModelSerializer):
     status = serializers.BooleanField(required=False)
     password = serializers.CharField(
         write_only=True,
-        required=True,
+        required=False,
         allow_blank=False,
         min_length=6
     )
