@@ -26,9 +26,17 @@ class IsBolim(permissions.BasePermission):
         return request.user.is_authenticated and request.user.role == "bolim"
     
     
-class IsMonitoring(permissions.BasePermission):
+class IsMonitoringReadOnly(permissions.BasePermission):
+    """
+    Monitoring role faqat ko‘rishi mumkin (GET, HEAD, OPTIONS)
+    """
     def has_permission(self, request, view):
-        return (
-            request.user.is_authenticated and
-            request.user.role == "monitoring"
-        )
+        user = request.user
+        if not user.is_authenticated:
+            return False
+
+        if user.role == "monitoring":
+            # Faqat GET, HEAD, OPTIONS
+            return request.method in permissions.SAFE_METHODS
+
+        return True 

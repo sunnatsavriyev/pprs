@@ -1,4 +1,7 @@
-from rest_framework import viewsets,filters
+from collections import defaultdict
+from rest_framework import viewsets,filters,mixins
+
+from ppr.permissions import IsMonitoringReadOnly
 from .models import *
 from .serializers import *
 from rest_framework import permissions, status
@@ -17,7 +20,18 @@ from datetime import date, timedelta
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.db.models import Q
 from django.utils import timezone
-
+from rest_framework.views import APIView
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
+from django.db.models.functions import TruncDate
+from django.db.models import Count
+from django.contrib.contenttypes.models import ContentType
+from django_filters import rest_framework as filters
+from drf_spectacular.utils import extend_schema, OpenApiParameter
+from drf_spectacular.types import OpenApiTypes
+from django.db.models.functions import ExtractMonth, ExtractYear
+from django.db.models.functions import Abs 
+from datetime import datetime
 class UserTuzilmaViewSet(viewsets.ModelViewSet):
     serializer_class = UserTuzilmaSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -25,8 +39,8 @@ class UserTuzilmaViewSet(viewsets.ModelViewSet):
     pagination_class = CustomPagination
     filter_backends = [
         DjangoFilterBackend,
-        filters.SearchFilter,
-        filters.OrderingFilter,
+        SearchFilter,
+        OrderingFilter,
     ]
     search_fields = [
         "username",
@@ -120,6 +134,41 @@ class UserTuzilmaViewSet(viewsets.ModelViewSet):
 
 
 
+class BolimCategoryViewSet(viewsets.ModelViewSet):
+    serializer_class = BolimCategorySerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        
+        # Admin hammasini ko'radi
+        if user.is_superuser or user.role == 'admin':
+            return BolimCategory.objects.all().order_by('id')
+        
+        # Tuzilma rahbari faqat o'ziga tegishli nomlarni ko'radi
+        if user.role == 'tarkibiy' and user.tarkibiy_tuzilma:
+            return BolimCategory.objects.filter(tuzilma=user.tarkibiy_tuzilma).order_by("id")
+            
+        return BolimCategory.objects.none()
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        
+        if user.role != 'tarkibiy' and not user.is_superuser:
+            raise PermissionDenied("Faqat tuzilma rahbari bo'lim nomini yarata oladi.")
+            
+        if user.role == 'tarkibiy':
+            # Avtomatik ravishda userning tuzilmasini biriktiramiz
+            serializer.save(
+                tuzilma=user.tarkibiy_tuzilma,
+                created_by=user
+            )
+        else:
+            serializer.save(created_by=user)
+
+
+
+
 class BolimViewSet(viewsets.ModelViewSet):
     serializer_class = BolimUserSerializer
     permission_classes = [permissions.IsAuthenticated] 
@@ -175,7 +224,7 @@ class TuzilmaNomiViewSet(viewsets.ModelViewSet):
 
 class ArizaYuborishFilter(django_filters.FilterSet):
     # Tuzilma bo‘yicha filter (ID orqali)
-    tuzilma = django_filters.NumberFilter(field_name='tuzilma_id')
+    tuzilma = django_filters.NumberFilter(field_name='tuzilmalar__id')
 
     # Kim tomonidan (ID orqali)
     kim_tomonidan = django_filters.NumberFilter(field_name='kim_tomonidan_id')
@@ -185,9 +234,10 @@ class ArizaYuborishFilter(django_filters.FilterSet):
 
     # Tuzilma nomi orqali filter (TEXT)
     tuzilma_nomi = django_filters.CharFilter(
-        field_name='tuzilma__tuzilma_nomi',
+        field_name='tuzilmalar__tuzilma_nomi',
         lookup_expr='icontains'
     )
+    status = django_filters.CharFilter(lookup_expr='exact')
 
     class Meta:
         model = ArizaYuborish
@@ -197,7 +247,8 @@ class ArizaYuborishFilter(django_filters.FilterSet):
             'tuzilma',
             'kim_tomonidan',
             'created_by',
-            'tuzilma_nomi'
+            'tuzilma_nomi',
+            'status',
         ]
 
 
@@ -207,8 +258,8 @@ class ArizaYuborishFilter(django_filters.FilterSet):
 class ArizaYuborishViewSet(viewsets.ModelViewSet):
     queryset = ArizaYuborish.objects.all().order_by('-id')
     serializer_class = ArizaYuborishSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter, DjangoFilterBackend]
+    permission_classes = [permissions.IsAuthenticated, IsMonitoringReadOnly]
+    filter_backends = [SearchFilter, OrderingFilter, DjangoFilterBackend]
 
     search_fields = ['status', 'tuzilmalar__tuzilma_nomi', 'created_by__username', 'comment']
     ordering_fields = ['id', 'tuzilmalar__tuzilma_nomi', 'created_by__username']
@@ -219,18 +270,43 @@ class ArizaYuborishViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        if user.is_superuser or getattr(user, 'role', None) == "admin":
+
+        # 1. Admin / Superuser → hamma arizalarni ko‘radi
+        if user.is_superuser or user.is_admin():
             return ArizaYuborish.objects.all().order_by('-id')
-        
-        # Qaysi tuzilmalar ro'yxatida foydalanuvchining tuzilmasi bo'lsa, o'shani ko'radi
-        # Yoki o'zi yaratgan arizalarni ko'radi
-        if user.tarkibiy_tuzilma:
+
+        # 2. Monitoring → faqat GET → barcha arizalarni ko‘radi
+        if user.is_monitoring():
+            return ArizaYuborish.objects.all().order_by('-id')
+
+        # 3. Tarkibiy → o‘z tuzilmasi + o‘z yaratgan arizalar
+        if user.is_tarkibiy() and user.tarkibiy_tuzilma:
             return ArizaYuborish.objects.filter(
-                models.Q(created_by=user) | models.Q(tuzilmalar=user.tarkibiy_tuzilma)
+                models.Q(created_by=user) |
+                models.Q(tuzilmalar=user.tarkibiy_tuzilma)
             ).distinct().order_by('-id')
-        
+
+        # 4. Bekat → o‘z bekati + o‘z yaratgan arizalar
+        if user.is_bekat() and user.bekat_nomi:
+            return ArizaYuborish.objects.filter(
+                models.Q(created_by=user) |
+                models.Q(tuzilmalar=user.bekat_nomi)
+            ).distinct().order_by('-id')
+
+        # 5. Bo‘lim → o‘z bo‘limi + o‘z yaratgan arizalar
+        if user.is_bolim() and user.bolim:
+            return ArizaYuborish.objects.filter(
+                models.Q(created_by=user) |
+                models.Q(tuzilmalar=user.bolim)
+            ).distinct().order_by('-id')
+
+        # 6. Oddiy foydalanuvchi → faqat o‘zi yaratgan arizalar
         return ArizaYuborish.objects.filter(created_by=user).order_by('-id')
 
+
+
+    
+    
     def perform_create(self, serializer):
         user = self.request.user
         serializer.save(
@@ -263,11 +339,12 @@ class KelganArizalarFilter(django_filters.FilterSet):
 class KelganArizalarViewSet(viewsets.ModelViewSet):
     queryset = ArizaYuborish.objects.all().order_by('-id')
     serializer_class = ArizaYuborishWithKelganSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsMonitoringReadOnly]
 
     search_fields = [
         'status',
-        'tuzilma__tuzilma_nomi',
+        'tuzilmalar__tuzilma_nomi',
+        'comment',
         'created_by__username',
         'kelganlar__comment',
         'kelganlar__status'
@@ -282,77 +359,117 @@ class KelganArizalarViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
 
-        if user.is_superuser or getattr(user, 'role', None) == "admin":
+        # 1. Admin / Superuser → hamma arizalarni ko‘radi
+        if user.is_superuser or user.is_admin():
             return ArizaYuborish.objects.prefetch_related(
                 Prefetch('kelganlar', queryset=KelganArizalar.objects.all())
             ).order_by('-id')
 
-        if user.tarkibiy_tuzilma:
-            return ArizaYuborish.objects.filter(
-                tuzilma=user.tarkibiy_tuzilma
-            ).prefetch_related(
+        # 2. Monitoring → faqat GET → barcha arizalarni ko‘radi
+        if user.is_monitoring():
+            return ArizaYuborish.objects.prefetch_related(
                 Prefetch('kelganlar', queryset=KelganArizalar.objects.all())
             ).order_by('-id')
 
-        elif user.bekat_nomi:
-            tuzilma = TarkibiyTuzilma.objects.filter(
-                tuzilma_nomi=user.bekat_nomi
-            ).first()
-            if tuzilma:
-                return ArizaYuborish.objects.filter(
-                    tuzilma=tuzilma
-                ).prefetch_related(
-                    Prefetch('kelganlar', queryset=KelganArizalar.objects.all())
-                ).order_by('-id')
+        # 3. Tarkibiy → o‘z tuzilmasi + o‘z yaratgan arizalar
+        if user.is_tarkibiy() and user.tarkibiy_tuzilma:
+            return ArizaYuborish.objects.filter(
+                models.Q(created_by=user) |
+                models.Q(tuzilmalar=user.tarkibiy_tuzilma)
+            ).prefetch_related(
+                Prefetch('kelganlar', queryset=KelganArizalar.objects.all())
+            ).distinct().order_by('-id')
 
-        return ArizaYuborish.objects.none()
+        # 4. Bekat → o‘z bekati + o‘z yaratgan arizalar
+        if user.is_bekat() and user.bekat_nomi:
+            return ArizaYuborish.objects.filter(
+                models.Q(created_by=user) |
+                models.Q(tuzilmalar=user.bekat_nomi)
+            ).prefetch_related(
+                Prefetch('kelganlar', queryset=KelganArizalar.objects.all())
+            ).distinct().order_by('-id')
+
+        # 5. Bo‘lim → o‘z bo‘limi + o‘z yaratgan arizalar
+        if user.is_bolim() and user.bolim:
+            return ArizaYuborish.objects.filter(
+                models.Q(created_by=user) |
+                models.Q(tuzilmalar=user.bolim)
+            ).prefetch_related(
+                Prefetch('kelganlar', queryset=KelganArizalar.objects.all())
+            ).distinct().order_by('-id')
+
+        # 6. Oddiy foydalanuvchi → faqat o‘zi yaratgan arizalar
+        return ArizaYuborish.objects.filter(created_by=user).prefetch_related(
+            Prefetch('kelganlar', queryset=KelganArizalar.objects.all())
+        ).order_by('-id')
 
     
     
     
-    @action(detail=False, methods=['post'], serializer_class=ArizaStatusUpdateSerializer)
-    def status_ozgartirish(self, request):
+class ArizaStatusViewSet(viewsets.ModelViewSet):
+    queryset = ArizaYuborish.objects.all()
+    permission_classes = [IsAuthenticated]
+    serializer_class = ArizaStatusUpdateSerializer
+
+    def create(self, request):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         ariza = serializer.validated_data['ariza']
         holat = serializer.validated_data['holat']
         comment = serializer.validated_data.get('comment', '')
-
+        akt_file = serializer.validated_data.get('akt_file')
+        ilovalar = serializer.validated_data.get('ilovalar')
         user = request.user
         
+        # --- DEBUG PRINTLAR (Terminalda tekshiring) ---
+        print(f"DEBUG: User: {user.username}, Role: {getattr(user, 'role', 'N/A')}")
         
-        is_admin = getattr(user, 'role', None) == 'admin'
-        if not (user.is_superuser or is_admin or ariza.tuzilma == getattr(user, 'tarkibiy_tuzilma', None)):
-            return Response({"detail": "Ruxsat yo‘q"}, status=403)
+        allowed = False
 
-        ariza.status = holat
-
-        if holat == "qaytarildi":
-            ariza.qayta_yuklandi = False
+        if user.is_superuser or getattr(user, "role", None) == "admin":
+            allowed = True
         else:
-            ariza.qayta_yuklandi = bool(ariza.rasmlar.exists() or ariza.bildirgi)
+            # Rolga qarab foydalanuvchi tuzilmasini aniqlash
+            user_tuzilma = None
+            if hasattr(user, 'tarkibiy_tuzilma') and user.tarkibiy_tuzilma:
+                user_tuzilma = user.tarkibiy_tuzilma
+            elif hasattr(user, 'bekat_nomi') and user.bekat_nomi:
+                user_tuzilma = user.bekat_nomi
+            elif hasattr(user, 'bolim') and user.bolim:
+                user_tuzilma = user.bolim
+            
+            # MUHIM: Ariza.tuzilmalar bu Many-to-Many. 
+            # Shuning uchun filter orqali tekshiramiz
+            if user_tuzilma and ariza.tuzilmalar.filter(id=user_tuzilma.id).exists():
+                allowed = True
+            
+            # Agar o'zi yaratgan bo'lsa ham ruxsat berish (ixtiyoriy)
+            if ariza.created_by == user:
+                allowed = True
 
-        ariza.save()
-
-        kelgan = None
-        if comment:
-            kelgan = KelganArizalar.objects.create(
-                ariza=ariza,
-                created_by=user,
-                comment=comment or "", 
-                status=holat,         
-                is_approved=user.is_superuser
+        if not allowed:
+            return Response(
+                {"detail": "Ushbu arizani o'zgartirishga ruxsatingiz yo'q (Tuzilma mos kelmadi)"}, 
+                status=403
             )
 
-        # Response ichida stepday kelganlar bilan qaytarish
-        serializer_data = ArizaYuborishWithKelganSerializer(ariza, context={'request': request}).data
+        # Holatni yangilash mantiqi davom etadi...
+        ariza.status = holat
+        ariza.save()
 
-        return Response({
-            "success": True,
-            "ariza": serializer_data,
-            "return_commenti": comment or None
-        }, status=status.HTTP_200_OK)
+        KelganArizalar.objects.create(
+            ariza=ariza,
+            created_by=user,
+            comment=comment,
+            status=holat, # "bajarilgan" o'rniga tanlangan holatni yuboring
+            is_approved=user.is_superuser,
+            akt_file=akt_file,
+            ilovalar=ilovalar
+        )
+
+        return Response({"success": True}, status=200)
+
 
 
 
@@ -362,7 +479,7 @@ class KelganArizalarViewSet(viewsets.ModelViewSet):
 class KelganArizalarCreateViewSet(viewsets.ModelViewSet):
     queryset = KelganArizalar.objects.all()
     serializer_class = KelganArizalarSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated,IsMonitoringReadOnly]
     search_fields = ['status', 'ariza__tuzilma__tuzilma_nomi', 'created_by__username']
     ordering_fields = ['id', 'sana', 'status']
     filterset_fields = ['status', 'is_approved' ]
@@ -449,6 +566,61 @@ class ArizaImageDeleteAPIView(APIView):
         )
 
 
+
+class StepDeleteAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    # Swagger uchun request body
+    step_ids_param = openapi.Schema(
+        type=openapi.TYPE_OBJECT,
+        required=['step_ids'],
+        properties={
+            'step_ids': openapi.Schema(
+                type=openapi.TYPE_ARRAY,
+                items=openapi.Items(type=openapi.TYPE_INTEGER),
+                description='O‘chiriladigan step IDlar ro‘yxati'
+            )
+        }
+    )
+
+    @swagger_auto_schema(
+        request_body=step_ids_param,
+        responses={
+            200: openapi.Response(
+                description="Steps deleted successfully",
+                examples={
+                    "application/json": {
+                        "success": True,
+                        "deleted_count": 3
+                    }
+                }
+            ),
+            400: "Step ID lar berilmagan",
+            403: "Ruxsat yo‘q"
+        }
+    )
+    def post(self, request):
+        user = request.user
+        # faqat admin va superuser
+        if not (user.is_superuser or getattr(user, 'role', None) == 'admin'):
+            return Response({"detail": "Ruxsat yo‘q"}, status=status.HTTP_403_FORBIDDEN)
+
+        # step_ids olish
+        step_ids = request.data.get("step_ids", [])
+        if not step_ids or not isinstance(step_ids, list):
+            return Response({"detail": "Step ID lar berilmagan"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Steplarni filter qilish va o'chirish
+        steps = KelganArizalar.objects.filter(id__in=step_ids)
+        deleted_count = steps.count()
+        steps.delete()
+
+        return Response({
+            "success": True,
+            "deleted_count": deleted_count
+        }, status=status.HTTP_200_OK)
+
+
 # class KelganArizalarImagedeleteAPIView(APIView):
 #     permission_classes = [permissions.IsAuthenticated]
 
@@ -470,19 +642,78 @@ class ArizaImageDeleteAPIView(APIView):
 #         )
 
 
+
+
+
+
+
+
+
+def get_custom_queryset(viewset_instance):
+    user = viewset_instance.request.user
+    model = viewset_instance.queryset.model
+    qs = model.objects.all().order_by('-id')
+
+    # 1. Admin va Monitoring hamma narsani ko'radi
+    if user.is_superuser or user.is_admin() or user.is_monitoring():
+        return qs
+
+    # 2. Tarkibiy (Tuzilma)
+    if user.is_tarkibiy() and user.tarkibiy_tuzilma:
+        return qs.filter(tarkibiy_tuzilma=user.tarkibiy_tuzilma)
+
+    # 3. Bo'lim mantiqi
+    if user.is_bolim():
+        category = None
+        if hasattr(user, 'bolim_profile') and user.bolim_profile.bolim_category:
+            category = user.bolim_profile.bolim_category
+
+        # PPRTuri modelida 'user', ObyektNomi modelida 'created_by'
+        if hasattr(model, 'user'):
+            query = Q(user=user)
+        elif hasattr(model, 'created_by'):
+            query = Q(created_by=user)
+        else:
+            query = Q(pk__isnull=True)  # Hech qaysi user bilan bog'lanmagan model
+
+        # Shu bo'limdagi boshqa userlar qo'shgan obyektlar
+        if category:
+            query |= Q(user__bolim_profile__bolim_category=category) if hasattr(model, 'user') else Q(created_by__bolim_profile__bolim_category=category)
+
+        return qs.filter(query).distinct()
+
+    # 4. Bekat
+    if user.is_bekat() and user.bekat_nomi:
+        return qs.filter(bekat=user.bekat_nomi)
+
+    # 5. Default: faqat o'zi qo'shgan
+    if hasattr(model, 'user'):
+        return qs.filter(user=user)
+    elif hasattr(model, 'created_by'):
+        return qs.filter(created_by=user)
+
+    return qs.none()
+
+
+
+
             
 class PPRTuriViewSet(viewsets.ModelViewSet):
     queryset = PPRTuri.objects.all().order_by('-id')
     serializer_class = PPRTuriSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsMonitoringReadOnly]
     
     def get_queryset(self):
+        return get_custom_queryset(self)
+
+    def perform_create(self, serializer):
         user = self.request.user
-
-        if user.is_superuser or getattr(user, 'role', None) == "admin":
-            return PPRTuri.objects.all().order_by('-id')
-
-        return PPRTuri.objects.filter(user=user).order_by('-id')
+        serializer.save(
+            user=user,
+            tarkibiy_tuzilma=user.tarkibiy_tuzilma,
+            bekat=user.bekat_nomi,
+            bolim=user.bolim
+        )
     
 
 
@@ -491,8 +722,23 @@ class ObyektNomiViewSet(viewsets.ModelViewSet):
     serializer_class = ObyektNomiSerializer
     pagination_class = CustomPagination
     search_fields = ['obyekt_nomi']
-    filter_backends = [filters.SearchFilter]
-    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [SearchFilter]
+    permission_classes = [permissions.IsAuthenticated, IsMonitoringReadOnly]
+    
+    
+    
+    def get_queryset(self):
+        return get_custom_queryset(self)
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        # Obyektni yaratayotgan foydalanuvchining tegishli tashkilotlarini biriktiramiz
+        serializer.save(
+            created_by=user,
+            tarkibiy_tuzilma=user.tarkibiy_tuzilma,
+            bekat=user.bekat_nomi,
+            bolim=user.bolim
+        )
 
 
 
@@ -500,216 +746,718 @@ class ObyektLocationViewSet(viewsets.ModelViewSet):
     queryset = ObyektLocation.objects.all().order_by('-id')
     serializer_class = ObyektLocationSerializer
     pagination_class = CustomPagination
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsMonitoringReadOnly]
+
+    def get_queryset(self):
+        return get_custom_queryset(self)
+
 
     def create(self, request, *args, **kwargs):
-        obyekt_id = request.data.get('obyekt')
+        user = request.user
+        if user.is_monitoring():
+            raise PermissionDenied("Monitoring faqat ko‘rishi mumkin")
 
+        obyekt_id = request.data.get('obyekt')
         if not obyekt_id:
-            return Response(
-                {"detail": "obyekt majburiy"},
-                status=400
-            )
+            return Response({"detail": "obyekt majburiy"}, status=400)
 
         if ObyektLocation.objects.filter(obyekt_id=obyekt_id).exists():
-            return Response(
-                {"detail": "Bu obyekt uchun locatsiya allaqachon mavjud"},
-                status=400
-            )
+            return Response({"detail": "Bu obyekt uchun locatsiya allaqachon mavjud"}, status=400)
 
         return super().create(request, *args, **kwargs)
 
 
 
-class PPRJadvalViewSet(viewsets.ModelViewSet):
-    serializer_class = PPRJadvalSerializer
-    queryset = PPRJadval.objects.all()
-    permission_classes = [permissions.IsAuthenticated]
-    pagination_class = CustomPagination
-    filter_backends = [
-        DjangoFilterBackend,
-        SearchFilter,
-        OrderingFilter,
-    ]
 
-    filterset_fields = {
-        'oy': ['exact'],
-        'obyekt': ['exact'],
-        'ppr_turi': ['exact'],
-        'tasdiqlangan': ['exact'],
-        'boshlash_sanasi': ['gte'],
-        'yakunlash_sanasi': ['lte'],
-    }
+
+
+
+
+class PPRYillikJadvalFilter(django_filters.FilterSet):
+    oy = django_filters.CharFilter(method='filter_oy')
+    yil = django_filters.NumberFilter()
+    tuzilma = django_filters.NumberFilter(field_name="tarkibiy_tuzilma_id")
+    bolim = django_filters.NumberFilter(field_name="bolim_id")
+
+    class Meta:
+        model = PPRYillikJadval
+        fields = ['yil', 'obyekt', 'ppr_turi', 'status', 'tasdiqlangan', 'tuzilma', 'bolim']
+
+    def filter_oy(self, queryset, name, value):
+        return queryset.filter(oylar__contains=[value])
+
+
+
+
+
+    
+
+class PPRYillikJadvalViewSet(viewsets.ModelViewSet):
+    serializer_class = PPRYillikJadvalSerializer
+    queryset = PPRYillikJadval.objects.all()
+    permission_classes = [permissions.IsAuthenticated, IsMonitoringReadOnly]
+    pagination_class = CustomPagination
+
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class = PPRYillikJadvalFilter
 
     search_fields = [
         'obyekt__obyekt_nomi',
         'ppr_turi__nomi',
-        'ppr_turi__qisqachanomi',
         'comment',
     ]
 
-    ordering_fields = [
-        'id',
-        'oy',
-        'boshlash_sanasi',
-        'yakunlash_sanasi',
-    ]
     ordering = ['-id']
 
-    
     def get_queryset(self):
         user = self.request.user
-        queryset = PPRJadval.objects.all()
+        qs = super().get_queryset().select_related('ppr_turi')
+        
+        bolim_filter = self.request.query_params.get("bolim_category")
+        tuzilma_filter = self.request.query_params.get("tuzilma")
 
-        if not (user.is_superuser or getattr(user, 'role', None) == "admin"):
-            queryset = queryset.filter(ppr_turi__user=user)
+        # 1. ADMIN & MONITORING: Hamma bo'limlarni filter qila oladi
+        if user.is_superuser or user.is_admin() or user.is_monitoring():
+            if bolim_filter:
+                qs = qs.filter(bolim_category__nomi__iexact=bolim_filter)
+            if tuzilma_filter:
+                qs = qs.filter(tarkibiy_tuzilma_id=tuzilma_filter)
+            return qs
 
-        return queryset.order_by('-id')
+        # 2. TARKIBIY (RAHBAR): Faqat o'z tuzilmasi va tanlangan bo'lim
+        if user.is_tarkibiy():
+            if not bolim_filter:
+                return qs.none() # Bo'lim tanlanmasa bo'sh
+            return qs.filter(
+                tarkibiy_tuzilma=user.tarkibiy_tuzilma,
+                bolim_category__nomi__iexact=bolim_filter
+            ).exclude(status="jarayonda") # Rahbar jarayondagilarni ko'rmaydi
 
-    
-    @action(detail=False, methods=['get'], url_path='yillik')
-    def yillik_jadval(self, request):
-        queryset = self.get_queryset().filter(boshlash_sanasi__isnull=True)
+        # 3. BO'LIM: Faqat o'z bo'limi
+        if user.is_bolim():
+            user_bolim_cat = getattr(user.bolim_profile, 'bolim_category', None)
+            if not user_bolim_cat: return qs.none()
+            
+            # O'zi yaratganlar (hamma status) YOKI boshqalar yaratgan tasdiqlanganlar
+            return qs.filter(bolim_category=user_bolim_cat).filter(
+                models.Q(created_by=user) | models.Q(tasdiqlangan=True)
+            ).distinct()
 
-        serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return qs.none()
 
-    
-    @action(detail=False, methods=['get'], url_path='oylik')
-    def oylik_jadval(self, request):
-        queryset = self.get_queryset().filter(boshlash_sanasi__isnull=False)
 
-        serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+    def create(self, request, *args, **kwargs):
+        oylar = request.data.getlist("oylar")
+        obyektlar = request.data.getlist("obyekt")
 
-    # =======================
-    # JADVAL YARATISH (YILLIK / OYLIK)
-    # =======================
-    @action(detail=False, methods=['post'], url_path='create-jadval')
-    def create_jadval(self, request):
-        # Agar tasdiqlangan jadval bo‘lsa, yangi yaratib bo‘lmaydi
-        if PPRJadval.objects.filter(tasdiqlangan=True).exists():
+        if not oylar or not obyektlar:
             return Response(
-                {"detail": "Tasdiqlangan jadval mavjud. Yangi jadval qo‘shib bo‘lmaydi."},
-                status=status.HTTP_400_BAD_REQUEST
+                {"error": "Oylar va Obyektlar tanlanishi shart"},
+                status=400
             )
 
-        jadval_type = request.data.get("jadval_type")
-        obyektlar = ObyektNomi.objects.all()
-        ppr_turlari = PPRTuri.objects.filter(user=request.user)
+        data = request.data.copy()
+        data.setlist("oylar", oylar)
+        data.setlist("obyekt", obyektlar)
 
-        if not ppr_turlari.exists():
-            return Response(
-                {"detail": "Sizga tegishli PPR turlari topilmadi"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
 
-        # -------- YILLIK JADVAL --------
-        if jadval_type == "yillik":
-            oylar = [
-                "Yanvar", "Fevral", "Mart", "Aprel", "May", "Iyun",
-                "Iyul", "Avgust", "Sentabr", "Oktabr", "Noyabr", "Dekabr"
-            ]
+        return Response(serializer.data, status=201)
 
-            for oy in oylar:
-                for obyekt in obyektlar:
-                    for ppr in ppr_turlari:
-                        PPRJadval.objects.create(
-                            oy=oy,
-                            sana=None,
-                            obyekt=obyekt,
-                            ppr_turi=ppr
-                        )
 
-        # -------- OYLIK JADVAL --------
-        elif jadval_type == "oylik":
-            oy = request.data.get("oy")
-            kunlar = request.data.get("kunlar")  # eski variant
-            boshlanish = request.data.get("boshlanish_sana")
-            yakunlash = request.data.get("yakunlash_sana")
-
-            # ❌ oy + sana oralig‘i birga bo‘lmasin
-            if oy and (boshlanish or yakunlash):
-                return Response(
-                    {"detail": "Oy tanlanganda boshlanish/yakunlash sana kiritilmaydi"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # ❌ sana oralig‘i to‘liq bo‘lishi shart
-            if (boshlanish and not yakunlash) or (yakunlash and not boshlanish):
-                return Response(
-                    {"detail": "Boshlanish va yakunlash sanasi birga kiritilishi shart"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            sanalar = []
-
-            # ✅ 1️⃣ Sana oralig‘i bo‘yicha
-            if boshlanish and yakunlash:
-                current = boshlanish
-                while current <= yakunlash:
-                    sanalar.append(current)
-                    current += timedelta(days=1)
-
-                oy = boshlanish.strftime("%B")
-
-            # ✅ 2️⃣ Eski variant (oy + kunlar)
-            elif oy and kunlar:
-                sanalar = kunlar
-
-            else:
-                return Response(
-                    {"detail": "Oy + kunlar yoki boshlanish/yakunlash sana kiritilishi shart"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            for sana in sanalar:
-                for obyekt in obyektlar:
-                    for ppr in ppr_turlari:
-                        PPRJadval.objects.create(
-                            oy=oy,
-                            sana=sana,
-                            obyekt=obyekt,
-                            ppr_turi=ppr
-                        )
-
-        else:
-            return Response(
-                {"detail": "Noto‘g‘ri jadval turi (yillik yoki oylik bo‘lishi kerak)"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        return Response(
-            {"detail": "Jadval muvaffaqiyatli yaratildi"},
-            status=status.HTTP_201_CREATED
+    def perform_create(self, serializer):
+        user = self.request.user
+        bolim_cat = getattr(user.bolim_profile, 'bolim_category', None) if hasattr(user, 'bolim_profile') else None
+        
+        serializer.save(
+            created_by=user,
+            tarkibiy_tuzilma=user.tarkibiy_tuzilma,
+            bolim_category=bolim_cat,
+            bekat=getattr(user, 'bekat_nomi', None),
+            bolim=getattr(user, 'bolim', None)
         )
-      
-      
-      
-class PPRBajarildiViewSet(viewsets.ModelViewSet):
-    serializer_class = PPRBajarildiSerializer
+
+
+
+
+class PPRYillikYuborishViewSet(viewsets.ModelViewSet):
+    queryset = PPRYillikYuborish.objects.all()
+    serializer_class = PPRYillikYuborishSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_bolim():
+            return self.queryset.filter(user=user)
+        if user.is_tarkibiy():
+            return self.queryset.filter(tarkibiy_tuzilma=user.tarkibiy_tuzilma)
+        return self.queryset
+
+class PPRYillikTasdiqlashViewSet(viewsets.ModelViewSet):
+    queryset = PPRYillikTasdiqlash.objects.all()
+    serializer_class = PPRYillikTasdiqlashSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_tarkibiy():
+            return self.queryset.filter(yuborish_paketi__tarkibiy_tuzilma=user.tarkibiy_tuzilma)
+        return super().get_queryset()
+
+
+class PPRJadvalFilter(filters.FilterSet):
+    tuzilma = filters.NumberFilter(field_name="tarkibiy_tuzilma_id")
+
+    bolim_category = filters.CharFilter(
+        field_name="bolim_category__nomi",
+        lookup_expr="iexact"
+    )
+
+    ppr_turi = filters.CharFilter(
+        field_name="ppr_turi__nomi",
+        lookup_expr="iexact"
+    )
+
+    sana = filters.DateFromToRangeFilter()
+
+    class Meta:
+        model = PPRJadval
+        fields = ["tuzilma", "bolim_category", "ppr_turi", "sana"]
+
+
+
+
+
+
+class PPRYuborishViewSet(viewsets.ModelViewSet):
+    queryset = PPRYuborish.objects.all()
+    serializer_class = PPRYuborishSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         user = self.request.user
-        # Faqat o'z userining bajarilgan PPRlarini ko‘rsatish
-        return PPRBajarildi.objects.filter(user=user).order_by('-created_at', '-created_time')
-
-    def perform_create(self, serializer):
-        jadval = serializer.validated_data['jadval']
-
-        if jadval.boshlash_sanasi is None:
-            raise serializers.ValidationError("Faqat oylik jadval elementlarini bajarildi deb belgilash mumkin!")
-
-        if PPRBajarildi.objects.filter(user=self.request.user, jadval=jadval).exists():
-            raise serializers.ValidationError("Siz bu PPRni allaqachon bajarildi deb belgilagansiz!")
-
-        serializer.save(user=self.request.user)     
-      
+        # Faqat faqat aktiv paketlar
+        qs = self.queryset.filter(yil__gt=0, is_active=True) 
         
-class PPRYakunlashViewSet(viewsets.ModelViewSet):
-    queryset = PPRYakunlash.objects.all()
-    serializer_class = PPRJadvalYakunlashSerializer  
+        if user.is_bolim():
+            return qs.filter(user=user)
+        if user.is_tarkibiy():
+            return qs.filter(tarkibiy_tuzilma=user.tarkibiy_tuzilma)
+        return qs
+
+
+
+class PPRTasdiqlashFilter(django_filters.FilterSet):
+    status = django_filters.CharFilter(field_name="status", lookup_expr="iexact")
+    comment = django_filters.CharFilter(field_name="comment", lookup_expr="icontains")
+
+    # Oy endi to‘g‘ridan-to‘g‘ri PPRYuborish dan olinadi
+    oy = django_filters.NumberFilter(
+        field_name="yuborish_paketi__oy"
+    )
+
+    yil = django_filters.NumberFilter(
+        field_name="yuborish_paketi__yil"
+    )
+
+    class Meta:
+        model = PPRTasdiqlash
+        fields = ["status", "oy", "yil"]
+        
+        
+    @property
+    def qs(self):
+        # super().qs => property, shuning uchun () ishlatilmaydi
+        parent_qs = super().qs
+        return parent_qs.filter(yuborish_paketi__is_active=True)
+
+
+
+
+
+
+
+
+
+
+
+class PPRTasdiqlashViewSet(viewsets.ModelViewSet):
+    queryset = PPRTasdiqlash.objects.all()
+    serializer_class = PPRTasdiqlashSerializer
+    # Bu ViewSet'ga faqat Rahbar va Adminlar kira oladi
+    permission_classes = [permissions.IsAuthenticated] 
+    pagination_class = CustomPagination
+
+    
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class = PPRTasdiqlashFilter
+
+    search_fields = [
+        "comment",
+        "user__username",
+    ]
+
+    ordering_fields = [
+        "created_at",
+        "status",
+        "yuborish_paketi__oy",
+        "yuborish_paketi__yil",
+    ]
+    ordering = ["-created_at"]
+
+
+    def get_queryset(self):
+        user = self.request.user
+
+        # 🔹 GET (list, retrieve) → hamma auth bo‘lganlar ko‘rsin
+        if self.action in ['list', 'retrieve']:
+            return self.queryset.filter(yuborish_paketi__is_active=True)
+
+        # 🔹 WRITE (create, update, delete) → faqat rahbar va admin
+        if user.is_tarkibiy():
+            return self.queryset.filter(
+                yuborish_paketi__tarkibiy_tuzilma=user.tarkibiy_tuzilma
+            )
+        if user.is_superuser or user.is_admin():
+            return self.queryset
+
+        return self.queryset.none()
+
+    def get_serializer_class(self):
+        if self.action in ['list', 'retrieve']:
+            return PPRTasdiqlashDetailSerializer
+        return PPRTasdiqlashSerializer
+
+
+
+
+
+class PPRJadvalViewSet(viewsets.ModelViewSet):
+    serializer_class = PPRJadvalSerializer
+    # ManyToMany bo'lgani uchun prefetch_related bazaga yukni kamaytiradi
+    queryset = PPRJadval.objects.all().prefetch_related(
+        'obyektlar', 
+        'bajarildilar', 
+        'bajarildilar__bajarilgan_obyektlar',
+        'bajarildilar__images',
+        'bajarildilar__user'
+    ).order_by('-id')
+    permission_classes = [permissions.IsAuthenticated, IsMonitoringReadOnly]
+    pagination_class = CustomPagination
+    
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class = PPRJadvalFilter
+    # Qidiruv fieldini yangiladik:
+    search_fields = ['obyektlar__obyekt_nomi', 'ppr_turi__nomi', 'comment']
+    ordering = ['-id']
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+
+        if not user.is_authenticated:
+            return qs.none()
+        
+        if 'pk' in self.kwargs or 'id' in self.kwargs:
+            return qs
+    
+    
+        # Query parametrlarni olish
+        tuzilma_id = self.request.query_params.get("tuzilma")
+        bolim_value = self.request.query_params.get("bolim_category")
+
+        # 1. ADMIN VA MONITORING ROLI
+        if user.is_superuser or user.is_admin() or user.is_monitoring():
+            # Agar bo'lim filtri tanlanmagan bo'lsa, jadval bo'sh turadi
+            if not bolim_value:
+                return qs.none()
+            
+            # Bo'lim tanlanganda o'sha bo'limni (va agar tanlansa tuzilmani) ko'rsatadi
+            qs = qs.filter(bolim_category__nomi__iexact=bolim_value)
+            if tuzilma_id:
+                qs = qs.filter(tarkibiy_tuzilma_id=tuzilma_id)
+            return qs
+
+        # 2. TARKIBIY (RAHBAR) ROLI
+        if user.is_tarkibiy():
+            # Rahbar ham bo'limni tanlamaguncha hech narsani ko'rmaydi
+            if not bolim_value:
+                return qs.none()
+            
+            # Faqat o'z tuzilmasi, tanlangan bo'lim va "jarayonda" bo'lmaganlar
+            return qs.filter(
+                tarkibiy_tuzilma=user.tarkibiy_tuzilma,
+                bolim_category__nomi__iexact=bolim_value
+            ).exclude(status="jarayonda")
+
+        # 3. BO'LIM ROLI
+        if user.is_bolim():
+            user_bolim_cat = getattr(user.bolim_profile, 'bolim_category', None) if hasattr(user, 'bolim_profile') else None
+            
+            if not user_bolim_cat:
+                return qs.none()
+
+            # Bo'lim xodimi kirganda faqat o'z bo'limidagilarni ko'radi
+            # Lekin tasdiqlanmagan bo'lsa, faqat o'zi yaratganini ko'radi
+            return qs.filter(
+                bolim_category=user_bolim_cat
+            ).filter(
+                Q(created_by=user) | Q(status__in=["tasdiqlandi", "bajarildi"])
+            ).distinct()
+
+        # 4. BEKAT ROLI
+        if user.is_bekat() and user.bekat_nomi:
+            return qs.filter(bekat=user.bekat_nomi, status__in=["tasdiqlandi", "bajarildi"])
+
+        # Qolgan barcha holatlarda bo'sh qaytarish
+        return qs.none()
+    
+    
+    def perform_create(self, serializer):
+        user = self.request.user
+        serializer.save(
+            created_by=user,
+            tarkibiy_tuzilma=getattr(user, 'tarkibiy_tuzilma', None),
+            bekat=getattr(user, 'bekat_nomi', None),
+            bolim=getattr(user, 'bolim', None)
+        )
+
+    # def retrieve(self, request, *args, **kwargs):
+    #     # 1. URL-dagi ID orqali asosiy jadval obyektini olamiz
+    #     instance = self.get_object()
+        
+    #     # 2. Shu obyektning sanasi va ppr_turi bo'yicha bazadan qidiramiz
+    #     # get_queryset() ni ishlatamizki, foydalanuvchining ko'rish huquqi (filtrlari) saqlanib qolsin
+    #     queryset = self.get_queryset().filter(
+    #         sana=instance.sana,
+    #         ppr_turi=instance.ppr_turi
+    #     )
+        
+    #     # 3. Natijani serializer orqali list ko'rinishida qaytaramiz
+    #     serializer = self.get_serializer(queryset, many=True)
+        
+    #     return Response(serializer.data)
+   
+   
+   
+   
+   
+      
+class PPRBajarildiViewSet(viewsets.ModelViewSet):
+    serializer_class = PPRBajarildiSerializer
+    permission_classes = [permissions.IsAuthenticated, IsMonitoringReadOnly]
+
+    def get_queryset(self):
+        user = self.request.user
+        # select_related va prefetch_related foizni hisoblashda bazaga so'rovni kamaytiradi
+        qs = PPRBajarildi.objects.select_related('jadval', 'user').prefetch_related(
+            'bajarilgan_obyektlar', 'jadval__obyektlar'
+        ).order_by('-created_at')
+
+        if user.is_superuser or user.is_admin() or user.is_monitoring():
+            return qs
+
+        # Foydalanuvchi faqat o'ziga tegishli jadvallar hisobotini ko'radi
+        return qs.filter(jadval__created_by=user)
+
+    def retrieve(self, request, *args, **kwargs):
+        pk = kwargs.get('pk') # Jadval ID
+        try:
+            jadval = PPRJadval.objects.prefetch_related('obyektlar').get(id=pk)
+        except PPRJadval.DoesNotExist:
+            return Response({"detail": "Jadval topilmadi"}, status=404)
+
+        bajarildilar = self.get_queryset().filter(jadval_id=pk)
+        
+        # Umumiy foizni hisoblash mantiqi
+        jami_count = jadval.obyektlar.count()
+        bajarilgan_ids = bajarildilar.values_list('bajarilgan_obyektlar', flat=True).distinct()
+        
+        umumiy_foiz = 0
+        if jami_count > 0:
+            umumiy_foiz = round((len([x for x in bajarilgan_ids if x is not None]) / jami_count) * 100, 2)
+
+        serializer = self.get_serializer(bajarildilar, many=True)
+
+        return Response({
+            "jadval_id": pk,
+            "sana": jadval.sana,
+            "jami_obyektlar_soni": jami_count,
+            "joriy_status": jadval.status,
+            "umumiy_bajarilish_foizi": umumiy_foiz,
+            "tarix": serializer.data
+        })
+        
+        
+    def create(self, request, *args, **kwargs):
+        data = request.data.copy() if request.data else request.POST.copy()
+        
+        if 'bajarilgan_obyektlar' in data:
+            obyektlar = request.data.getlist('bajarilgan_obyektlar')
+            data.setlist('bajarilgan_obyektlar', obyektlar)
+
+        serializer = self.get_serializer(data=data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Bu yerda serializer.save() ishlaydi va biz yozgan create() ishga tushadi
+        self.perform_create(serializer)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
+    
+    
+
+
+
+class PPRYillikBajarildiViewSet(viewsets.ModelViewSet):
+    serializer_class = PPRYillikBajarildiSerializer
+    permission_classes = [permissions.IsAuthenticated, IsMonitoringReadOnly]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = PPRYillikBajarildi.objects.select_related(
+            'jadval', 'jadval__ppr_turi', 'user'
+        ).order_by('created_at')
+
+        if user.is_superuser or getattr(user, 'role', None) == "admin":
+            return qs
+
+        # Tarkibiy
+        if user.is_tarkibiy() and user.tarkibiy_tuzilma:
+            return qs.filter(jadval__ppr_turi__user=user)
+
+        # Bekat
+        if user.is_bekat() and user.bekat_nomi:
+            return qs.filter(jadval__ppr_turi__user=user)
+
+        # Bolim
+        if user.is_bolim() and user.bolim:
+            return qs.filter(jadval__ppr_turi__user=user)
+
+        # Monitoring hammasini ko‘radi, lekin faqat GET
+        if user.is_monitoring():
+            return qs
+
+        return PPRYillikBajarildi.objects.none()
+
+    def retrieve(self, request, *args, **kwargs):
+        # Shunchaki standart retrieve ishlayveradi
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+        
+        return Response({
+            "jadval_id": instance.jadval.id,
+            "oy": instance.oy,
+            "data": serializer.data
+        })
+
+
+    
+    
+    
+    
+    
+
+
+class PPRYuborishStatusViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+    queryset = PPRJadval.objects.all()
+    # 1. serializer_class qo'shildi (AssertionError ni oldini oladi)
+    serializer_class = PPRYuborishStatusSerializer 
+    pagination_class = CustomPagination
+    permission_classes = [permissions.IsAuthenticated]
+    
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ['status', 'sana','bolim_category__nomi']
+    search_fields = ["status"]
+    ordering_fields = ['sana', 'id']
+    ordering = ["-sana"]
+
+    
+    
+    
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset().filter(sana__isnull=False)
+        bolim_value = self.request.query_params.get("bolim_category")
+
+        # 1. ADMIN VA MONITORING
+        if user.is_superuser or user.role in ['admin', 'monitoring']:
+            if bolim_value:
+                qs = qs.filter(bolim_category__nomi__iexact=bolim_value)
+            return qs # Admin hamma narsani ko'rishi mumkin (yoki filtr bilan)
+
+        # 2. TARKIBIY (RAHBAR) - O'z tuzilmasidagi barcha bo'limlarni ko'radi
+        if user.role == 'tarkibiy':
+            qs = qs.filter(tarkibiy_tuzilma=user.tarkibiy_tuzilma).exclude(status="jarayonda")
+            if bolim_value:
+                qs = qs.filter(bolim_category__nomi__iexact=bolim_value)
+            return qs
+
+        # 3. BO'LIM ROLI
+        if user.role == 'bolim':
+            user_bolim_cat = getattr(user.bolim_profile, 'bolim_category', None) if hasattr(user, 'bolim_profile') else None
+            if not user_bolim_cat:
+                return qs.none()
+            return qs.filter(bolim_category=user_bolim_cat)
+
+        return qs.none()
+
+    def list(self, request, *args, **kwargs):
+        # get_queryset orqali filtrlangan ma'lumotlarni olamiz
+        qs = self.filter_queryset(self.get_queryset().annotate(
+            v_yil=ExtractYear('sana'),
+            v_oy=ExtractMonth('sana')
+        ))
+
+        group_dict = {}
+        for item in qs:
+            if item.v_yil is None or item.v_oy is None:
+                continue
+            
+            # MUHIM: Guruhlash kalitiga bo'lim ID sini qo'shamiz
+            # Shunda bitta oyda har xil bo'limlar alohida qator bo'ladi
+            key = (item.v_yil, item.v_oy, item.bolim_category_id)
+            if key not in group_dict:
+                group_dict[key] = {
+                    'yil': item.v_yil, 
+                    'oy': item.v_oy, 
+                    'ppr_list': [],
+                    'bolim': item.bolim_category,
+                    'tuzilma': item.tarkibiy_tuzilma
+                }
+            group_dict[key]['ppr_list'].append(item)
+
+        result = []
+        for g in group_dict.values():
+            first_ppr = g['ppr_list'][0]
+            curr_yil = g['yil']
+            curr_oy = g['oy']
+
+            yaratuvchi_user = first_ppr.created_by.username if first_ppr.created_by else "Noma'lum"
+
+            # Tarix va qarorlar (Sizning kodingizdagidek)
+            yil_search = [curr_yil, -abs(curr_yil)]
+            yuborishlar = PPRYuborish.objects.filter(
+                yil__in=yil_search, 
+                oy=curr_oy,
+                bolim_category=g['bolim'],
+                tarkibiy_tuzilma=g['tuzilma']
+            ).select_related("user").order_by('created_at')
+
+            qarorlar = PPRTasdiqlash.objects.filter(
+                yuborish_paketi__id__in=yuborishlar.values_list('id', flat=True)
+            ).select_related("user").order_by('created_at')
+
+            history_list = []
+            # ... (history_list ga yuborishlar va qarorlarni append qilish logikasi o'zgarishsiz qoladi)
+            for yub in yuborishlar:
+                history_list.append({"id": yub.id, "type": "yuborish", "created_at": yub.created_at, "user": str(yub.user), "status": "yuborildi", "comment": yub.comment or "Yuborildi"})
+            for qaror in qarorlar:
+                history_list.append({"id": qaror.id, "type": "qaror", "created_at": qaror.created_at, "user": str(qaror.user), "status": qaror.status, "comment": qaror.comment or ""})
+            history_list.sort(key=lambda x: x['created_at'])
+
+            oxirgi_paket = yuborishlar.filter(yil__gt=0, is_active=True).order_by('-id').first()
+            current_yuborish_id = oxirgi_paket.id if oxirgi_paket else None
+
+            # Status aniqlash
+            if any(p.status == 'tasdiqlandi' for p in yuborishlar):
+                oy_status = 'tasdiqlandi'
+            elif any(p.status == 'yuborildi' for p in yuborishlar):
+                oy_status = 'yuborildi'
+            elif any(p.status == 'rad_etildi' for p in yuborishlar):
+                oy_status = 'rad_etildi'
+            else:
+                oy_status = 'jarayonda'
+
+            if oy_status not in ['jarayonda', 'bajarildi']:
+                result.append({
+                    'id': first_ppr.id,
+                    'yil': curr_yil,
+                    'oy': curr_oy,
+                    'oy_nomi': self.serializer_class.OY_NOMLARI.get(curr_oy),
+                    'bolim_nomi': g['bolim'].nomi if g['bolim'] else "Noma'lum", # Frontend uchun qo'shimcha
+                    'status': oy_status,
+                    'yaratuvchi_user': yaratuvchi_user,
+                    'yaratilgan_sana': first_ppr.sana.isoformat() if first_ppr.sana else None,
+                    'tasdiqlashlar': history_list,
+                    'yuborish_id': current_yuborish_id
+                })
+
+        result.sort(key=lambda x: x['id'], reverse=True)
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(result, request)
+        serializer = self.get_serializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+
+
+
+
+
+class PPRJarayondaOylikViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+    queryset = PPRJadval.objects.all()
+    serializer_class = PPRJarayondaOylikSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = CustomPagination
+
+    
+    
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset().filter(status='jarayonda', sana__isnull=False)
+        bolim_value = self.request.query_params.get("bolim_category")
+
+        # Admin / Monitoring / Tarkibiy (Hamma bo'limlarni ko'radi)
+        if user.is_superuser or user.role in ['admin', 'monitoring', 'tarkibiy']:
+            if user.role == 'tarkibiy':
+                qs = qs.filter(tarkibiy_tuzilma=user.tarkibiy_tuzilma)
+            
+            if bolim_value:
+                qs = qs.filter(bolim_category__nomi__iexact=bolim_value)
+            return qs
+
+        # Bo'lim (Faqat o'zinikini)
+        if user.role == 'bolim':
+            user_bolim_cat = getattr(user.bolim_profile, 'bolim_category', None) if hasattr(user, 'bolim_profile') else None
+            return qs.filter(bolim_category=user_bolim_cat, created_by=user) if user_bolim_cat else qs.none()
+
+        return qs.none()
+
+    def list(self, request, *args, **kwargs):
+        # O'zimizning get_queryset ni ishlatamiz
+        qs = self.get_queryset().annotate(
+            yil=ExtractYear('sana'),
+            oy=ExtractMonth('sana')
+        ).order_by('-sana')
+
+        group_dict = {}
+        for item in qs:
+            # Tarkibiy uchun bo'limlar ajralib turishi uchun key'ga bolim_id qo'shildi
+            key = (item.yil, item.oy, item.bolim_category_id)
+
+            if key not in group_dict:
+                group_dict[key] = {
+                    "id": item.id,
+                    "yil": item.yil,
+                    "oy": item.oy,
+                    "bolim_nomi": item.bolim_category.nomi if item.bolim_category else "Noma'lum",
+                    "status": "jarayonda",
+                    "yaratilgan_sana": item.sana
+                }
+
+        result = list(group_dict.values())
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(result, request)
+        serializer = self.get_serializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+
+
+
+
+
+    
+    
     
 class HujjatlarViewSet(viewsets.ModelViewSet):
     queryset = Hujjatlar.objects.all()
@@ -733,43 +1481,270 @@ MONTHS_UZ = {
     12: "Dekabr",
 }
 
+   
+class HujjatShabloniViewSet(viewsets.ModelViewSet):
+    queryset = HujjatShabloni.objects.all().order_by('-created_at')
+    serializer_class = HujjatShabloniSerializer
+    
+    permission_classes = [permissions.IsAuthenticated]
 
-class NotificationsViewSet(viewsets.ReadOnlyModelViewSet):
-    serializer_class = PPRJadvalSerializer
+    filter_backends = [DjangoFilterBackend, SearchFilter]
+
+    filterset_fields = ['tuzilma', 'nomi']
+
+    search_fields = ['tuzilma__tuzilma_nomi', 'nomi', 'qoshimcha_nomi']
+
+    def perform_create(self, serializer):
+        serializer.save(yuklovchi=self.request.user) 
+        
+        
+
+
+
+# ppr/views.py
+class NotificationViewSet(viewsets.ModelViewSet):
+    serializer_class = NotificationSerializer
+    queryset = Notification.objects.all()
+    pagination_class = CustomPagination
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user.is_authenticated:
+            return Notification.objects.none()
+
+        if user.role == 'tarkibiy':
+            # Rahbar faqat tasdiqlash so'rovlarini ko'radi
+            return Notification.objects.filter(
+                tarkibiy_tuzilma=user.tarkibiy_tuzilma,
+                for_rahbar=True
+            ).order_by('-created_at')
+
+        elif user.role == 'bolim':
+            if hasattr(user, 'bolim_profile') and user.bolim_profile:
+                # Bo'lim faqat natija (tasdiq/rad) xabarlarini ko'radi
+                return Notification.objects.filter(
+                    bolim_category=user.bolim_profile.bolim_category,
+                    for_rahbar=False
+                ).order_by('-created_at')
+
+        return Notification.objects.none()
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        
+        # Ko'rgan userlar ro'yxatiga qo'shish
+        if request.user not in instance.seen_by.all():
+            instance.seen_by.add(request.user)
+            instance.save()
+            
+        return super().retrieve(request, *args, **kwargs)
+
+
+
+
+     
+class StatisticsChartAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def list(self, request, *args, **kwargs):
-        today = date.today()
-        current_month_num = today.month
-        current_month_name = MONTHS_UZ[current_month_num]
+    def get(self, request):
         user = request.user
+        today = timezone.now().date()
+        start_date = today - timedelta(days=90)
 
-        queryset = PPRJadval.objects.all()
+        type_ = request.GET.get("type")   # bekat / tuzilma
+        obj_id = request.GET.get("id")
 
-        # oddiy user faqat o‘ziga tegishli PPRlarni ko‘rsin
-        if not (user.is_superuser or getattr(user, 'role', None) == "admin"):
-            queryset = queryset.filter(ppr_turi__user=user)
+        ppr_filter = {}
+        ariza_filter = {}
 
-       
-        today_ppr = queryset.filter(
-            boshlash_sanasi=today
+        bek_ct = ContentType.objects.get_for_model(Bekat)
+        bolim_ct = ContentType.objects.get_for_model(Bolim)
+        tuzilma_ct = ContentType.objects.get_for_model(TarkibiyTuzilma)
+
+        # === KATTA ROLLAR ===
+        if user.is_superuser or user.role in ["admin", "monitoring"]:
+            if type_ and obj_id:
+                if type_ == "bekat":
+                    ppr_filter["obyekt_type"] = bek_ct
+                    ppr_filter["obyekt_id"] = obj_id
+
+                    ariza_filter["obyekt_type"] = bek_ct
+                    ariza_filter["obyekt_id"] = obj_id
+
+                elif type_ == "tuzilma":
+                    ppr_filter["obyekt_type"] = tuzilma_ct
+                    ppr_filter["obyekt_id"] = obj_id
+
+                    ariza_filter["obyekt_type"] = tuzilma_ct
+                    ariza_filter["obyekt_id"] = obj_id
+
+        # === BEKAT ROLI ===
+        elif user.role == "bekat" and user.bekat_nomi:
+            ppr_filter["obyekt_type"] = bek_ct
+            ppr_filter["obyekt_id"] = user.bekat_nomi.id
+
+            ariza_filter["obyekt_type"] = bek_ct
+            ariza_filter["obyekt_id"] = user.bekat_nomi.id
+
+        # === BO‘LIM / TARKIBIY ===
+        elif user.role in ["bolim", "tarkibiy"] and user.bolim:
+            ppr_filter["obyekt_type"] = bolim_ct
+            ppr_filter["obyekt_id"] = user.bolim.id
+
+            ariza_filter["obyekt_type"] = bolim_ct
+            ariza_filter["obyekt_id"] = user.bolim.id
+
+        # === SANALAR ===
+        all_dates = []
+        d = start_date
+        while d <= today:
+            all_dates.append(d.strftime("%Y-%m-%d"))
+            d += timedelta(days=1)
+
+        # === PPR ===
+        ppr_stats = (
+            PPRJadval.objects
+            .filter(
+                sana__range=[start_date, today],
+                **ppr_filter
+            )
+            .annotate(date=TruncDate("sana"))
+            .values("date")
+            .annotate(count=Count("id"))
         )
 
-        monthly_ppr = queryset.filter(
-            Q(boshlash_sanasi__month=current_month_num) |
-            Q(oy=current_month_name)
+        # === ARIZA ===
+        ariza_stats = (
+            ArizaYuborish.objects
+            .filter(
+                status="bajarilgan",
+                sana__range=[start_date, today],
+                **ariza_filter
+            )
+            .annotate(date=TruncDate("sana"))
+            .values("date")
+            .annotate(count=Count("id"))
         )
 
-        return Response(
-            {
-                "today": {
-                    "count": today_ppr.count(),
-                    "pprlar": PPRJadvalSerializer(today_ppr, many=True).data
-                },
-                "this_month": {
-                    "count": monthly_ppr.count(),
-                    "pprlar": PPRJadvalSerializer(monthly_ppr, many=True).data
-                }
-            },
-            status=status.HTTP_200_OK
-        )
+        ppr_dict = {i["date"].strftime("%Y-%m-%d"): i["count"] for i in ppr_stats}
+        ariza_dict = {i["date"].strftime("%Y-%m-%d"): i["count"] for i in ariza_stats}
+
+        data = []
+        for d in all_dates:
+            data.append({
+                "date": d,
+                "mobile": ppr_dict.get(d, 0),
+                "desktop": ariza_dict.get(d, 0),
+            })
+
+        return Response(data)
+
+
+
+
+
+class DashboardBolimListView(APIView):
+    """Filter dropdown uchun bo'limlar ro'yxati"""
+    def get(self, request):
+        user = request.user
+        if user.role == 'tarkibiy':
+            # Rahbar faqat o'z tuzilmasidagi bo'limlarni ko'radi
+            bolimlar = BolimCategory.objects.filter(
+                ppr_jadvallar__tarkibiy_tuzilma=user.tarkibiy_tuzilma
+            ).distinct().values('id', 'nomi')
+        else:
+            # Adminlar barcha bo'limlarni ko'radi
+            bolimlar = BolimCategory.objects.all().values('id', 'nomi')
+            
+        return Response(bolimlar)
+    
+    
+    
+
+class PPRDashboardStatsView(APIView):
+    def get(self, request):
+        user = request.user
+        current_year = datetime.now().year
+        
+        # Query parametridan bo'lim ID sini olish (filter uchun)
+        bolim_filter = request.query_params.get('bolim_id')
+        
+        months = {
+            1: "Yanvar", 2: "Fevral", 3: "Mart", 4: "Aprel", 5: "May", 6: "Iyun",
+            7: "Iyul", 8: "Avgust", 9: "Sentabr", 10: "Oktabr", 11: "Noyabr", 12: "Dekabr"
+        }
+
+        # 1. Boshlang'ich queryset (yil bo'yicha)
+        queryset = PPRJadval.objects.filter(sana__year=current_year)
+
+        # 2. Rollar bo'yicha ruxsatlarni cheklash
+        if user.role == 'bolim':
+            # Bo'lim faqat o'zinikini ko'radi, filter parametriga ruxsat yo'q
+            user_bolim = getattr(user.bolim_profile, 'bolim_category', None)
+            queryset = queryset.filter(bolim_category=user_bolim)
+            
+        elif user.role == 'tarkibiy':
+            # Rahbar o'z tuzilmasidagi hamma bo'limni ko'radi
+            queryset = queryset.filter(tarkibiy_tuzilma=user.tarkibiy_tuzilma)
+            # Agar rahbar ma'lum bir bo'limni tanlasa (filter)
+            if bolim_filter:
+                queryset = queryset.filter(bolim_category_id=bolim_filter)
+                
+        elif user.role in ['admin', 'monitoring'] or user.is_superuser:
+            # Adminlar hammasini ko'radi, agar bo'lim tanlansa filter qiladi
+            if bolim_filter:
+                queryset = queryset.filter(bolim_category_id=bolim_filter)
+
+        # 3. Agregatsiya
+        stats = queryset.values('sana__month').annotate(
+            muddati_otgan=Count('id', filter=Q(muddat=True)),
+            bajarilgan=Count('id', filter=Q(status='bajarildi')),
+            umumiy=Count('id')
+        ).order_by('sana__month')
+
+        # 4. Formatlash
+        result = []
+        for m_id, m_name in months.items():
+            month_data = next((item for item in stats if item['sana__month'] == m_id), None)
+            result.append({
+                "oy_id": m_id,
+                "oy_nomi": m_name,
+                "muddati_otgan_PPRlar_soni": month_data['muddati_otgan'] if month_data else 0,
+                "bajarilgan_PPRlar_soni": month_data['bajarilgan'] if month_data else 0,
+                "umumiy_PPRlar_soni": month_data['umumiy'] if month_data else 0
+            })
+
+        return Response(result)  
+  
+  
+  
+  
+  
+  
+  
+  
+class TopTuzilmalarDashboardAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # Tarkibiy tuzilmalarni va ulardagi arizalar sonini hisoblash
+        top_tuzilmalar = TarkibiyTuzilma.objects.annotate(
+            bajarilgan_soni=Count(
+                'arizalar', # ArizaYuborish modelidagi related_name='arizalar' bo'lsa
+                filter=Q(arizalar__status='bajarilgan')
+            ),
+            umumiy_kelgan_soni=Count('arizalar')
+        ).order_by('-bajarilgan_soni')[:10]
+
+        data = []
+        for t in top_tuzilmalar:
+            # Bevosita TarkibiyTuzilma modelidagi 'rahbari' maydonini olamiz
+            data.append({
+                "tuzilma_nomi": t.tuzilma_nomi,
+                "rahbari": t.rahbari if t.rahbari else "Noma'lum", # Modelingizdagi maydon
+                "bajarilgan_soni": t.bajarilgan_soni,
+                "umumiy_kelgan_soni": t.umumiy_kelgan_soni,
+            })
+
+        serializer = TuzilmaDashboardSerializer(data, many=True)
+        return Response(serializer.data)

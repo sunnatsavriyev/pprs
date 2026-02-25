@@ -1,6 +1,9 @@
+# apps.py
 from django.apps import AppConfig
-
 
 class PprConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
-    name = 'ppr'
+    name = 'ppr' 
+
+    def ready(self):
+        import ppr.signals

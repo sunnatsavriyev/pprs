@@ -1,3 +1,4 @@
+from datetime import timedelta
 from django.db import models
 from django.contrib.auth.models import AbstractUser, Group, Permission
 from django.conf import settings
@@ -61,6 +62,7 @@ class CustomUser(AbstractUser):
         help_text='Specific permissions for this user.',
         verbose_name='user permissions'
     )
+    
 
     def is_admin(self):
         return self.role == "admin"
@@ -219,6 +221,30 @@ class TarkibiyTuzilma(models.Model):
 
 
 
+
+class BolimCategory(models.Model):
+    nomi = models.CharField(max_length=255)
+    tuzilma = models.ForeignKey(
+        'TarkibiyTuzilma', 
+        on_delete=models.CASCADE, 
+        related_name='bolim_kategoriyalari'
+    )
+    created_by = models.ForeignKey(
+        'CustomUser', 
+        on_delete=models.SET_NULL, 
+        null=True
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('nomi', 'tuzilma') # Bitta tuzilmada bir xil nomli bo'lim bo'lmasligi uchun
+
+    def __str__(self):
+        return f"{self.nomi} ({self.tuzilma.tuzilma_nomi})"
+
+
+
+
 class Bolim(models.Model):
     user = models.OneToOneField(
         CustomUser, 
@@ -228,7 +254,13 @@ class Bolim(models.Model):
         blank=True
     )
     tuzilma = models.ForeignKey(TarkibiyTuzilma, on_delete=models.CASCADE, related_name="bolimlar")
-    bolim_nomi = models.CharField(max_length=255)
+    bolim_category = models.ForeignKey(
+        BolimCategory, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        related_name='xodimlar',
+        verbose_name="Bo'lim nomi"
+    )
     faoliyati = models.TextField()
     rahbari = models.CharField(max_length=255)
     photo = models.ImageField(upload_to='bolim_photos/', blank=True, null=True)
@@ -241,7 +273,8 @@ class Bolim(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.bolim_nomi} | {self.tuzilma.tuzilma_nomi}"
+        category_name = self.bolim_category.nomi if self.bolim_category else "Noma'lum"
+        return f"{self.rahbari} | {category_name}"
 
 
 
@@ -261,6 +294,7 @@ class ArizaYuborish(models.Model):
     turi = models.CharField(max_length=15, choices=TURI, default="ijro")
     ijro_muddati = models.DateField(null=True, blank=True)
     comment = models.TextField()
+    extra_comment = models.TextField(null=True, blank=True)
     sana = models.DateTimeField(auto_now_add=True)
     kim_tomonidan = models.ForeignKey(
         CustomUser,
@@ -275,6 +309,7 @@ class ArizaYuborish(models.Model):
     is_approved = models.BooleanField(default=False)  
     bildirgi = models.FileField(upload_to='ariza_bildirgilar/' , null=True, blank=True)
     qayta_yuklandi = models.BooleanField(default=False)
+    muddati_otgan = models.BooleanField(default=False)
     def __str__(self):
         if self.kim_tomonidan:
             user = self.kim_tomonidan.username
@@ -317,21 +352,26 @@ class KelganArizalar(models.Model):
     status = models.CharField(max_length=20, choices=STATUS, default="jarayonda")
     created_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, blank=True)
     is_approved = models.BooleanField(default=False)
-
+    
+    turi = models.CharField(max_length=50)
+    ijro_muddati = models.DateField(null=True, blank=True)
+    bildirgi = models.FileField(upload_to='ariza_bildirgilar/', null=True, blank=True)
     def __str__(self):
         return f"Kelgan ariza - {self.ariza.id}"
 
 
 
 
-# class KelganArizalarImage(models.Model):
-#     kelgan = models.ForeignKey(
-#         KelganArizalar, 
-#         on_delete=models.CASCADE, 
-#         related_name="rasmlar"
-#     )
-#     rasm = models.ImageField(upload_to="kelgan_rasmlar_multi/")
+class KelganArizaImage(models.Model):
+    step = models.ForeignKey(
+        KelganArizalar, 
+        related_name="rasmlar", 
+        on_delete=models.CASCADE
+    )
+    rasm = models.ImageField(upload_to="ariza_rasmlar_multi/")
 
+    def __str__(self):
+        return f"Rasm step {self.step.id}"
 
 
 
@@ -340,7 +380,7 @@ class PPRTuri(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True)
     nomi = models.CharField(max_length=100, help_text="Masalan: Nomi", null=True, blank=True)
     qisqachanomi = models.CharField(max_length=100, help_text="Masalan: Qisqa nomi", null=True, blank=True)
-    davriyligi = models.IntegerField(max_length=100, help_text="Masalan: qancha vaqtda", null=True, blank=True)
+    davriyligi = models.IntegerField(help_text="Masalan: qancha vaqtda", null=True, blank=True)
     VaqtiChoises = (
         ("soat", "soat"),
         ("kun", "kun"),
@@ -350,6 +390,9 @@ class PPRTuri(models.Model):
     comment = models.TextField(null=True, blank=True)
     file = models.FileField(upload_to='ppr_turlari/', null=True, blank=True)
     kimlar_qiladi = models.CharField(max_length=255, null=True, blank=True)
+    tarkibiy_tuzilma = models.ForeignKey('TarkibiyTuzilma', on_delete=models.SET_NULL, null=True, blank=True)
+    bekat = models.ForeignKey('Bekat', on_delete=models.SET_NULL, null=True, blank=True)
+    bolim = models.ForeignKey('Bolim', on_delete=models.SET_NULL, null=True, blank=True)
 
     def __str__(self):
         return self.nomi
@@ -360,7 +403,10 @@ class PPRTuri(models.Model):
 class ObyektNomi(models.Model):
     obyekt_nomi = models.CharField(max_length=255)
     toliq_nomi = models.TextField()
-
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    tarkibiy_tuzilma = models.ForeignKey('TarkibiyTuzilma', on_delete=models.SET_NULL, null=True, blank=True)
+    bekat = models.ForeignKey('Bekat', on_delete=models.SET_NULL, null=True, blank=True)
+    bolim = models.ForeignKey('Bolim', on_delete=models.SET_NULL, null=True, blank=True)
     def __str__(self):
         return self.obyekt_nomi
 
@@ -380,8 +426,137 @@ class ObyektLocation(models.Model):
         return f"{self.obyekt.obyekt_nomi} ({self.lat}, {self.lng})"
 
 
+
+
+
+
+
+
+
+
+
 class PPRJadval(models.Model):
-    Choose_oy = (
+    STATUS_CHOICES = (
+        ("jarayonda", "Jarayonda"),
+        ("yuborildi", "Yuborildi"),
+        ("tasdiqlandi", "Tasdiqlandi"),
+        ("rad_etildi", "Rad etildi"),
+        ("bajarildi", "Bajarildi"),
+        
+    )
+    sana = models.DateField(null=True, blank=True) # Faqat bitta kun uchun
+    obyektlar = models.ManyToManyField(ObyektNomi, related_name="ppr_jadvallari")
+    ppr_turi = models.ForeignKey(PPRTuri, on_delete=models.CASCADE)
+    comment = models.TextField(null=True, blank=True)
+    status = models.CharField(max_length=15, choices=STATUS_CHOICES, default="jarayonda")
+    tasdiqlangan = models.BooleanField(default=False)
+    muddat = models.BooleanField(default=False)
+    bolim_category = models.ForeignKey(
+        BolimCategory, 
+        on_delete=models.CASCADE, 
+        related_name="ppr_jadvallari",
+        null=True, # Eski ma'lumotlar xato bermasligi uchun
+        blank=True
+    )
+    tarkibiy_tuzilma = models.ForeignKey('TarkibiyTuzilma', on_delete=models.SET_NULL, null=True, blank=True)
+    bekat = models.ForeignKey('Bekat', on_delete=models.SET_NULL, null=True, blank=True)
+    bolim = models.ForeignKey('Bolim', on_delete=models.SET_NULL, null=True, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    def save(self, *args, **kwargs):
+        from django.utils import timezone
+        # Muddatni hisoblash (sana bo'yicha)
+        if not self.muddat:
+            if self.status == "tasdiqlandi" and self.sana:
+                if timezone.now().date() > self.sana + timedelta(days=3):
+                    self.muddat = True
+
+        if self.pk and self.tasdiqlangan:
+            update_fields = kwargs.get("update_fields", None)
+            # faqat status update qilinmasa, xatoga yo'l qo'yish
+            if not update_fields or "status" not in update_fields:
+                raise ValueError("Tasdiqlangan jadvalni tahrirlash mumkin emas!")
+
+        super().save(*args, **kwargs)
+
+
+
+
+
+class PPRYuborish(models.Model):
+    STATUS_CHOICES = [
+        ('yuborildi', 'Yuborildi'),
+        ('tasdiqlandi', 'Tasdiqlandi'),
+        ('rad_etildi', 'Rad etildi'),
+    ]
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    yil = models.IntegerField()
+    oy = models.IntegerField()
+    bolim_category = models.ForeignKey('BolimCategory', on_delete=models.CASCADE)
+    tarkibiy_tuzilma = models.ForeignKey('TarkibiyTuzilma', on_delete=models.CASCADE)
+    status = models.CharField(max_length=15, choices=STATUS_CHOICES, default='yuborildi')
+    comment = models.TextField(null=True, blank=True) # Bo'lim xodimi izohi
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['yil', 'oy', 'bolim_category', 'tarkibiy_tuzilma'],
+                condition=models.Q(is_active=True),
+                name='unique_active_ppr_yuborish'
+            )
+        ]
+        
+    def __str__(self):
+        return f"{self.yil}-{self.oy} | {self.bolim_category} | {self.tarkibiy_tuzilma} | {self.status}"
+
+
+
+
+
+
+class PPRTasdiqlash(models.Model):
+    yuborish_paketi = models.OneToOneField(PPRYuborish, on_delete=models.CASCADE, related_name='qaror')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    status = models.CharField(max_length=15, choices=[("tasdiqlandi", "Tasdiqlandi"), ("rad_etildi", "Rad etildi")])
+    comment = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+
+
+    
+class PPRBajarildi(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    jadval = models.ForeignKey('PPRJadval', on_delete=models.CASCADE, related_name='bajarildilar')
+    bajarilgan_obyektlar = models.ManyToManyField(ObyektNomi)
+    comment = models.TextField(null=True, blank=True)
+    file = models.FileField(upload_to='ppr_bajarildi_files/', null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.jadval} - {self.created_at}"
+
+
+
+
+class PPRBajarildiImage(models.Model):
+    bajarildi = models.ForeignKey(
+        PPRBajarildi, on_delete=models.CASCADE, related_name='images'
+    )
+    image = models.ImageField(upload_to='ppr_bajarildi_images/')
+
+
+
+
+class PPRYakunlash(models.Model):
+    yakunlash = models.BooleanField(default=False)
+    
+  
+
+class PPRYillikJadval(models.Model):
+    OY_CHOICES = (
         ("Yanvar", "Yanvar"),
         ("Fevral", "Fevral"),
         ("Mart", "Mart"),
@@ -395,40 +570,102 @@ class PPRJadval(models.Model):
         ("Noyabr", "Noyabr"),
         ("Dekabr", "Dekabr"),
     )
-    
-    oy = models.CharField(max_length=20, choices=Choose_oy, null=True, blank=True)
-    boshlash_sanasi = models.DateField(null=True, blank=True)
-    yakunlash_sanasi = models.DateField(null=True, blank=True)
-    obyekt = models.ForeignKey(ObyektNomi, on_delete=models.CASCADE)
+    STATUS_CHOICES = (
+        ("jarayonda", "Jarayonda"),
+        ("yuborildi", "Yuborildi"),
+        ("tasdiqlandi", "Tasdiqlandi"),
+        ("rad_etildi", "Rad etildi"),
+        ("bajarildi", "Bajarildi"),
+        
+    )
+    yil = models.IntegerField()
+    oylar = models.JSONField()  
+
+    obyekt = models.ManyToManyField(ObyektNomi, related_name="yillik_jadvallar")
     ppr_turi = models.ForeignKey(PPRTuri, on_delete=models.CASCADE)
+    status = models.CharField(max_length=15, choices=STATUS_CHOICES, default="jarayonda")
     comment = models.TextField(null=True, blank=True)
     tasdiqlangan = models.BooleanField(default=False)
-
+    tarkibiy_tuzilma = models.ForeignKey('TarkibiyTuzilma', on_delete=models.SET_NULL, null=True, blank=True)
+    bekat = models.ForeignKey('Bekat', on_delete=models.SET_NULL, null=True, blank=True)
+    bolim_category = models.ForeignKey(
+        BolimCategory, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        related_name="yillik_jadvallar"
+    )
+    bolim = models.ForeignKey('Bolim', on_delete=models.SET_NULL, null=True, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
     def save(self, *args, **kwargs):
         if self.pk and self.tasdiqlangan:
-            raise ValueError("Tasdiqlangan jadvalni tahrirlash mumkin emas!")
+            raise ValueError("Tasdiqlangan yillik jadvalni tahrirlash mumkin emas!")
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.oy} - {self.obyekt}"
+        return f"{self.yil} - {', '.join(self.oylar)}"
 
 
-class PPRYakunlash(models.Model):
-    yakunlash = models.BooleanField(default=False)
-    
-    
-class PPRBajarildi(models.Model):
+class PPRYillikYuborish(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    jadval = models.ForeignKey('PPRJadval', on_delete=models.CASCADE, related_name='bajarildi')
+    yil = models.IntegerField()
+    bolim_category = models.ForeignKey('BolimCategory', on_delete=models.CASCADE)
+    tarkibiy_tuzilma = models.ForeignKey('TarkibiyTuzilma', on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+class PPRYillikTasdiqlash(models.Model):
+    yuborish_paketi = models.OneToOneField(PPRYillikYuborish, on_delete=models.CASCADE, related_name='qaror')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    status = models.CharField(max_length=15, choices=[("tasdiqlandi", "Tasdiqlandi"), ("rad_etildi", "Rad etildi")])
     comment = models.TextField(null=True, blank=True)
-    file = models.FileField(upload_to='ppr_bajarildi_files/', null=True, blank=True)
-    images = models.ImageField(upload_to='ppr_bajarildi_images/', null=True, blank=True)
-    created_at = models.DateField(auto_now_add=True)
-    created_time = models.TimeField(auto_now_add=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+ 
+class PPRYillikBajarildi(models.Model):
+    OY_CHOICES = [
+        ("Yanvar", "Yanvar"),
+        ("Fevral", "Fevral"),
+        ("Mart", "Mart"),
+        ("Aprel", "Aprel"),
+        ("May", "May"),
+        ("Iyun", "Iyun"),
+        ("Iyul", "Iyul"),
+        ("Avgust", "Avgust"),
+        ("Sentyabr", "Sentyabr"),
+        ("Oktyabr", "Oktyabr"),
+        ("Noyabr", "Noyabr"),
+        ("Dekabr", "Dekabr"),
+    ]
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    jadval = models.ForeignKey(
+        'PPRYillikJadval', on_delete=models.CASCADE, related_name='bajarildilar'
+    )
+
+    oy = models.CharField(
+        max_length=10,
+        choices=OY_CHOICES
+    )
+
+    comment = models.TextField(null=True, blank=True)
+    file = models.FileField(upload_to='ppr_yillik_bajarildi_files/', null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('jadval', 'oy', 'user')
 
     def __str__(self):
-        return f"{self.user.username} - {self.jadval} - {self.created_at}"
+        return f"{self.jadval} - {self.oy}"
 
+
+
+class PPRYillikBajarildiImage(models.Model):
+    bajarildi = models.ForeignKey(
+        PPRYillikBajarildi, on_delete=models.CASCADE, related_name='images'
+    )
+    image = models.ImageField(upload_to='ppr_yillik_bajarildi_images/')
+ 
+  
 
 
 class Hujjatlar(models.Model):
@@ -439,10 +676,58 @@ class Hujjatlar(models.Model):
 
 
 
-# 8. Notifications
 
-class Notifications(models.Model):
-    ppr_qilish_oylik = models.CharField(max_length=255)
+class Notification(models.Model):
+    bolim_category = models.ForeignKey('BolimCategory', on_delete=models.CASCADE, null=True, blank=True)
+    tarkibiy_tuzilma = models.ForeignKey('TarkibiyTuzilma', on_delete=models.CASCADE, null=True, blank=True)
+    
+    # Faqat rahbarlarga tegishli xabarlar uchun (ixtiyoriy)
+    for_rahbar = models.BooleanField(default=False)
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    link_id = models.IntegerField(null=True, blank=True) 
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    seen_by = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name='seen_notifications')
+    class Meta:
+        ordering = ['-created_at']
+
+
+
+
+
+class HujjatShabloni(models.Model):
+    HUJJAT_TURLARI = (
+        ("bildirgi", "Bildirgi"),
+        ("ariza", "Ariza"),
+        ("tushuntirish_xati", "Tushuntirish xati"),
+        ("hisobot", "Hisobot"),
+        ("boshqa", "Boshqa"),
+    )
+
+    nomi = models.CharField(max_length=50, choices=HUJJAT_TURLARI, verbose_name="Hujjat turi")
+    file = models.FileField(upload_to='shablonlar/', verbose_name="Shablon fayli (Word)")
+    
+    # Qaysi tuzilma nomidan yuklanayotgani
+    tuzilma = models.ForeignKey(
+        'TarkibiyTuzilma', 
+        on_delete=models.CASCADE, 
+        related_name='shablonlar',
+        verbose_name="Tarkibiy Tuzilma"
+    )
+    
+    yuklovchi = models.ForeignKey(
+        settings.AUTH_USER_MODEL, # CustomUser
+        on_delete=models.SET_NULL, 
+        null=True, 
+        related_name='yuklangan_shablonlar'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return self.ppr_qilish_oylik
+        return f"{self.tuzilma.tuzilma_nomi} - {self.get_nomi_display()}"
+
+    class Meta:
+        verbose_name = "Hujjat Shabloni"
+        verbose_name_plural = "Hujjat Shablonlari"
+        ordering = ['-created_at']
