@@ -463,13 +463,16 @@ class PPRJadval(models.Model):
     bolim = models.ForeignKey('Bolim', on_delete=models.SET_NULL, null=True, blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
     def save(self, *args, **kwargs):
+        from datetime import timedelta
         from django.utils import timezone
-        # Muddatni hisoblash (sana bo'yicha)
-        if not self.muddat:
-            if self.status == "tasdiqlandi" and self.sana:
-                if timezone.now().date() > self.sana + timedelta(days=3):
-                    self.muddat = True
 
+        # 1. Muddatni muhrlash (agar hali False bo'lsa)
+        if not self.muddat and self.sana:
+            # Status tasdiqlandi yoki bajarildi bo'lishi bilan tekshiramiz
+            if self.status in ["tasdiqlandi", "bajarildi"]:
+                if timezone.now().date() > (self.sana + timedelta(days=3)):
+                    self.muddat = True
+                    
         if self.pk and self.tasdiqlangan:
             update_fields = kwargs.get("update_fields", None)
             # faqat status update qilinmasa, xatoga yo'l qo'yish
@@ -686,7 +689,7 @@ class Notification(models.Model):
     title = models.CharField(max_length=255)
     message = models.TextField()
     link_id = models.IntegerField(null=True, blank=True) 
-    is_read = models.BooleanField(default=False)
+    # is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     seen_by = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name='seen_notifications')
     class Meta:

@@ -1569,7 +1569,7 @@ class PPRJadvalSerializer(serializers.ModelSerializer):
     bolim_nomi = serializers.CharField(source='bolim_category.nomi', read_only=True)
     ppr_davriyligi = serializers.CharField(source='ppr_turi.davriyligi', read_only=True)
     ppr_turi_name = serializers.CharField(source='ppr_turi.qisqachanomi', read_only=True)
-    muddat = serializers.BooleanField(read_only=True)
+    muddat = serializers.SerializerMethodField()
     steps = PPRBajarildiSerializer(source='bajarildilar', many=True, read_only=True)
     umumiy_foiz = serializers.SerializerMethodField()
 
@@ -1582,6 +1582,31 @@ class PPRJadvalSerializer(serializers.ModelSerializer):
         read_only_fields = ['bolim_category', 'tarkibiy_tuzilma', 'bekat', 'bolim']
 
     
+    def get_muddat(self, obj):
+        from datetime import timedelta
+        from django.utils import timezone
+        
+        # 1. AGAR bazada allaqachon True bo'lsa, statusdan qat'i nazar True qaytarish.
+        # Bu mantiq "bajarildi" bo'lganda ham True qolishini ta'minlaydi.
+        if obj.muddat:
+            return True
+            
+        # 2. Hozirgi vaqtni olish
+        bugun = timezone.now().date()
+        
+        # 3. Agar hali False bo'lsa, vaqtni tekshiramiz
+        if obj.sana:
+            muddati_o_tgan = bugun > (obj.sana + timedelta(days=3))
+            
+            # Agar vaqt o'tib ketgan bo'lsa, statusidan qat'i nazar True
+            if muddati_o_tgan:
+                return True
+        
+        # 4. Agar yuqoridagilarning hech biri bo'lmasa, status 'bajarildi' bo'lsa False
+        if obj.status == "bajarildi":
+            return False
+
+        return False
     
     def validate_sana(self, value):
         
@@ -2022,15 +2047,24 @@ class NotificationSerializer(serializers.ModelSerializer):
     seen_usernames = serializers.SlugRelatedField(
         many=True, read_only=True, slug_field='username', source='seen_by'
     )
-    is_read = serializers.SerializerMethodField()
+    is_read = serializers.BooleanField(required=False)
 
     class Meta:
         model = Notification
         fields = ['id', 'title', 'message', 'link_id', 'is_read', 'seen_usernames', 'created_at']
+        read_only_fields = ['id', 'title', 'message', 'link_id', 'seen_usernames', 'created_at']
 
-    def get_is_read(self, obj):
-        user = self.context['request'].user
-        return obj.seen_by.filter(id=user.id).exists()
+    def to_representation(self, instance):
+    
+        ret = super().to_representation(instance)
+        request = self.context.get('request')
+        
+        if request and request.user.is_authenticated:
+            # Bazadagi ManyToMany ni tekshiramiz
+            ret['is_read'] = instance.seen_by.filter(id=request.user.id).exists()
+        else:
+            ret['is_read'] = False
+        return ret
 
 
 

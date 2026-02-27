@@ -87,11 +87,15 @@ class UserTuzilmaViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         user = self.request.user
 
-        # Monitoring faqat GET
-        if user.role == "monitoring":
-            if self.request.method not in permissions.SAFE_METHODS:
-                raise PermissionDenied("Monitoring faqat ko‘rishi mumkin")
+        # Agar foydalanuvchi monitoring bo'lsa
+        if user.is_authenticated and user.role == "monitoring":
+            # Yaratish (POST) qat'iy taqiqlanadi
+            if self.request.method == 'POST':
+                raise PermissionDenied("Monitoring xodimi yangi foydalanuvchi qo'sholmaydi.")
+            
+            return super().get_permissions()
         
+        # Admin va boshqalar uchun standart holat
         return super().get_permissions()
     
     
@@ -142,7 +146,7 @@ class BolimCategoryViewSet(viewsets.ModelViewSet):
         user = self.request.user
         
         # Admin hammasini ko'radi
-        if user.is_superuser or user.role == 'admin':
+        if user.is_superuser or user.role in ['admin', 'monitoring']:
             return BolimCategory.objects.all().order_by('id')
         
         # Tuzilma rahbari faqat o'ziga tegishli nomlarni ko'radi
@@ -271,37 +275,24 @@ class ArizaYuborishViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
 
-        # 1. Admin / Superuser → hamma arizalarni ko‘radi
-        if user.is_superuser or user.is_admin():
+        # 1. Admin va Monitoring hamma narsani ko'radi
+        if user.is_superuser or user.is_admin() or user.is_monitoring():
             return ArizaYuborish.objects.all().order_by('-id')
 
-        # 2. Monitoring → faqat GET → barcha arizalarni ko‘radi
-        if user.is_monitoring():
-            return ArizaYuborish.objects.all().order_by('-id')
+        # 2. Foydalanuvchining o'zi yaratgan arizalari (har doim ko'rinishi kerak)
+        query = models.Q(created_by=user)
 
-        # 3. Tarkibiy → o‘z tuzilmasi + o‘z yaratgan arizalar
         if user.is_tarkibiy() and user.tarkibiy_tuzilma:
-            return ArizaYuborish.objects.filter(
-                models.Q(created_by=user) |
-                models.Q(tuzilmalar=user.tarkibiy_tuzilma)
-            ).distinct().order_by('-id')
+            query |= models.Q(created_by__tarkibiy_tuzilma=user.tarkibiy_tuzilma)
+            
+        elif user.is_bekat() and user.bekat_nomi:
+            query |= models.Q(created_by__bekat_nomi=user.bekat_nomi)
+            
+        elif user.is_bolim() and user.bolim:
+            # Shu bo'limdagi hamma xodimlar yaratgan arizalar
+            query |= models.Q(created_by__bolim=user.bolim)
 
-        # 4. Bekat → o‘z bekati + o‘z yaratgan arizalar
-        if user.is_bekat() and user.bekat_nomi:
-            return ArizaYuborish.objects.filter(
-                models.Q(created_by=user) |
-                models.Q(tuzilmalar=user.bekat_nomi)
-            ).distinct().order_by('-id')
-
-        # 5. Bo‘lim → o‘z bo‘limi + o‘z yaratgan arizalar
-        if user.is_bolim() and user.bolim:
-            return ArizaYuborish.objects.filter(
-                models.Q(created_by=user) |
-                models.Q(tuzilmalar=user.bolim)
-            ).distinct().order_by('-id')
-
-        # 6. Oddiy foydalanuvchi → faqat o‘zi yaratgan arizalar
-        return ArizaYuborish.objects.filter(created_by=user).order_by('-id')
+        return ArizaYuborish.objects.filter(query).distinct().order_by('-id')
 
 
 
@@ -359,49 +350,31 @@ class KelganArizalarViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
 
-        # 1. Admin / Superuser → hamma arizalarni ko‘radi
-        if user.is_superuser or user.is_admin():
+        # Admin va Monitoring hamma narsani ko'radi
+        if user.is_superuser or user.is_admin() or user.is_monitoring():
             return ArizaYuborish.objects.prefetch_related(
                 Prefetch('kelganlar', queryset=KelganArizalar.objects.all())
             ).order_by('-id')
 
-        # 2. Monitoring → faqat GET → barcha arizalarni ko‘radi
-        if user.is_monitoring():
-            return ArizaYuborish.objects.prefetch_related(
-                Prefetch('kelganlar', queryset=KelganArizalar.objects.all())
-            ).order_by('-id')
+        # Asosiy filtr: Faqat foydalanuvchining tuzilmasiga kelgan arizalar
+        # VA foydalanuvchi o'zi yaratmagan bo'lishi kerak (o'ziniki o'ziga kelmasligi uchun)
+        
+        query = models.Q()
 
-        # 3. Tarkibiy → o‘z tuzilmasi + o‘z yaratgan arizalar
         if user.is_tarkibiy() and user.tarkibiy_tuzilma:
-            return ArizaYuborish.objects.filter(
-                models.Q(created_by=user) |
-                models.Q(tuzilmalar=user.tarkibiy_tuzilma)
-            ).prefetch_related(
-                Prefetch('kelganlar', queryset=KelganArizalar.objects.all())
-            ).distinct().order_by('-id')
+            query = models.Q(tuzilmalar=user.tarkibiy_tuzilma)
+        elif user.is_bekat() and user.bekat_nomi:
+            query = models.Q(tuzilmalar=user.bekat_nomi)
+        elif user.is_bolim() and user.bolim:
+            query = models.Q(tuzilmalar=user.bolim)
+        else:
+            # Agar hech qanday tuzilmaga tegishli bo'lmasa, hech narsa ko'rmaydi
+            return ArizaYuborish.objects.none()
 
-        # 4. Bekat → o‘z bekati + o‘z yaratgan arizalar
-        if user.is_bekat() and user.bekat_nomi:
-            return ArizaYuborish.objects.filter(
-                models.Q(created_by=user) |
-                models.Q(tuzilmalar=user.bekat_nomi)
-            ).prefetch_related(
-                Prefetch('kelganlar', queryset=KelganArizalar.objects.all())
-            ).distinct().order_by('-id')
-
-        # 5. Bo‘lim → o‘z bo‘limi + o‘z yaratgan arizalar
-        if user.is_bolim() and user.bolim:
-            return ArizaYuborish.objects.filter(
-                models.Q(created_by=user) |
-                models.Q(tuzilmalar=user.bolim)
-            ).prefetch_related(
-                Prefetch('kelganlar', queryset=KelganArizalar.objects.all())
-            ).distinct().order_by('-id')
-
-        # 6. Oddiy foydalanuvchi → faqat o‘zi yaratgan arizalar
-        return ArizaYuborish.objects.filter(created_by=user).prefetch_related(
+        # O'zi yaratganlarini chiqarib tashlaymiz: .exclude(created_by=user)
+        return ArizaYuborish.objects.filter(query).exclude(created_by=user).prefetch_related(
             Prefetch('kelganlar', queryset=KelganArizalar.objects.all())
-        ).order_by('-id')
+        ).distinct().order_by('-id')
 
     
     
@@ -1538,6 +1511,30 @@ class NotificationViewSet(viewsets.ModelViewSet):
             instance.save()
             
         return super().retrieve(request, *args, **kwargs)
+    
+    
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        user = request.user
+        
+        is_read_sent = request.data.get("is_read")
+        
+        # 1. Bazaga yozish (PUT mantiqi)
+        if is_read_sent is True:
+            instance.seen_by.add(user)
+        elif is_read_sent is False:
+            instance.seen_by.remove(user)
+        
+        # 2. MUHIM: Serializerga context={'request': request} beramiz.
+        # Shunda to_representation metodi request.user ni taniydi va 
+        # javobda (Response body) is_read: true bo'lib qaytadi.
+        serializer = self.get_serializer(instance, context={'request': request})
+        
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    # Agar PATCH (partial update) ishlatmoqchi bo'lsangiz, uni ham update-ga yo'naltiring
+    def partial_update(self, request, *args, **kwargs):
+        return self.update(request, *args, **kwargs)
 
 
 
@@ -1659,68 +1656,159 @@ class DashboardBolimListView(APIView):
         return Response(bolimlar)
     
     
-    
-
+@extend_schema(
+    parameters=[
+        OpenApiParameter(
+            name="year",
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description="Yil bo'yicha filter (masalan: 2026). Default: hozirgi yil"
+        ),
+        OpenApiParameter(
+            name="bolim_category",  # Nomini o'zgartirdik
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            description="Bo'lim nomi (BolimCategory nomi) bo'yicha filter"
+        )
+    ]
+)
 class PPRDashboardStatsView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
-        user = request.user
-        current_year = datetime.now().year
-        
-        # Query parametridan bo'lim ID sini olish (filter uchun)
-        bolim_filter = request.query_params.get('bolim_id')
-        
-        months = {
-            1: "Yanvar", 2: "Fevral", 3: "Mart", 4: "Aprel", 5: "May", 6: "Iyun",
-            7: "Iyul", 8: "Avgust", 9: "Sentabr", 10: "Oktabr", 11: "Noyabr", 12: "Dekabr"
+        # 1. Filterni olish
+        year_param = request.query_params.get("year")
+        bolim_nomi = request.query_params.get("bolim_category") # Nom orqali olamiz
+        bugun = timezone.now().date()
+        limit_sana = bugun - timedelta(days=3)
+        try:
+            year = int(year_param) if year_param else timezone.now().year
+        except ValueError:
+            return Response({"error": "Year must be integer"}, status=400)
+
+        # 2. Asosiy Queryset (Yil bo'yicha)
+        queryset = PPRJadval.objects.filter(sana__year=year)
+
+        # 3. Bo'lim nomi bo'yicha filterlash (iexact - katta/kichik harfni farqlamaydi)
+        if bolim_nomi:
+            queryset = queryset.filter(bolim_category__nomi__iexact=bolim_nomi)
+
+        months_map = {
+            1: "Yanvar", 2: "Fevral", 3: "Mart", 4: "Aprel",
+            5: "May", 6: "Iyun", 7: "Iyul", 8: "Avgust",
+            9: "Sentabr", 10: "Oktabr", 11: "Noyabr", 12: "Dekabr"
         }
 
-        # 1. Boshlang'ich queryset (yil bo'yicha)
-        queryset = PPRJadval.objects.filter(sana__year=current_year)
-
-        # 2. Rollar bo'yicha ruxsatlarni cheklash
-        if user.role == 'bolim':
-            # Bo'lim faqat o'zinikini ko'radi, filter parametriga ruxsat yo'q
-            user_bolim = getattr(user.bolim_profile, 'bolim_category', None)
-            queryset = queryset.filter(bolim_category=user_bolim)
-            
-        elif user.role == 'tarkibiy':
-            # Rahbar o'z tuzilmasidagi hamma bo'limni ko'radi
-            queryset = queryset.filter(tarkibiy_tuzilma=user.tarkibiy_tuzilma)
-            # Agar rahbar ma'lum bir bo'limni tanlasa (filter)
-            if bolim_filter:
-                queryset = queryset.filter(bolim_category_id=bolim_filter)
-                
-        elif user.role in ['admin', 'monitoring'] or user.is_superuser:
-            # Adminlar hammasini ko'radi, agar bo'lim tanlansa filter qiladi
-            if bolim_filter:
-                queryset = queryset.filter(bolim_category_id=bolim_filter)
-
-        # 3. Agregatsiya
-        stats = queryset.values('sana__month').annotate(
-            muddati_otgan=Count('id', filter=Q(muddat=True)),
+        # 4. Oy + Bo'lim bo'yicha agregatsiya
+        stats = queryset.values(
+            'sana__month',
+            'bolim_category__id',
+            'bolim_category__nomi'
+        ).annotate(
+            muddati_otgan=Count('id', filter=Q(status='tasdiqlandi', sana__lt=limit_sana)),
             bajarilgan=Count('id', filter=Q(status='bajarildi')),
             umumiy=Count('id')
         ).order_by('sana__month')
 
-        # 4. Formatlash
         result = []
-        for m_id, m_name in months.items():
-            month_data = next((item for item in stats if item['sana__month'] == m_id), None)
+
+        # 5. Ma'lumotlarni oylar bo'yicha yig'ish
+        for m_id, m_name in months_map.items():
+            bolimlar_stats = [
+                {
+                    "bolim_id": item['bolim_category__id'],
+                    "bolim_nomi": item['bolim_category__nomi'],
+                    "muddati_otgan": item['muddati_otgan'],
+                    "bajarilgan": item['bajarilgan'],
+                    "umumiy": item['umumiy']
+                }
+                for item in stats if item['sana__month'] == m_id
+            ]
+
             result.append({
                 "oy_id": m_id,
                 "oy_nomi": m_name,
-                "muddati_otgan_PPRlar_soni": month_data['muddati_otgan'] if month_data else 0,
-                "bajarilgan_PPRlar_soni": month_data['bajarilgan'] if month_data else 0,
-                "umumiy_PPRlar_soni": month_data['umumiy'] if month_data else 0
+                "tuzilmalar": bolimlar_stats
             })
 
-        return Response(result)  
+        # 6. Yillik umumiy
+        yearly = queryset.aggregate(
+            muddati_otgan=Count('id', filter=Q(muddat=True)),
+            bajarilgan=Count('id', filter=Q(status='bajarildi')),
+            umumiy=Count('id')
+        )
+
+        return Response({
+            "year": year,
+            "filter_bolim_category": bolim_nomi, # Nomni qaytaramiz
+            "months": result,
+            "yearly_summary": yearly
+        })
   
   
   
   
-  
-  
+class DashboardStatsAPIView(APIView):
+    def get(self, request):
+        now = timezone.now()
+        this_year = now.year
+        last_year = this_year - 1
+        this_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        # Foiz hisoblash funksiyasi (xatoliklarni oldini olish uchun)
+        def calculate_growth(current, previous):
+            if previous == 0:
+                return 100.0 if current > 0 else 0.0
+            return round(((current - previous) / previous) * 100, 2)
+
+        # 1. PPR Statistika (Kunlik + Yillik)
+        ppr_this_year = (
+            PPRJadval.objects.filter(sana__year=this_year).count() + 
+            PPRYillikJadval.objects.filter(yil=this_year).count()
+        )
+        ppr_last_year = (
+            PPRJadval.objects.filter(sana__year=last_year).count() + 
+            PPRYillikJadval.objects.filter(yil=last_year).count()
+        )
+        ppr_growth = calculate_growth(ppr_this_year, ppr_last_year)
+
+        # 2. Hamma yuborilgan arizalar
+        arizalar_this_year = ArizaYuborish.objects.filter(sana__year=this_year).count()
+        arizalar_last_year = ArizaYuborish.objects.filter(sana__year=last_year).count()
+        arizalar_growth = calculate_growth(arizalar_this_year, arizalar_last_year)
+
+        # 3. Hamma bajarilgan arizalar
+        completed_this_year = ArizaYuborish.objects.filter(sana__year=this_year, status="bajarilgan").count()
+        completed_last_year = ArizaYuborish.objects.filter(sana__year=last_year, status="bajarilgan").count()
+        completed_growth = calculate_growth(completed_this_year, completed_last_year)
+
+        # 4. Userlar statistikasi (O'tgan oyga nisbatan o'sish)
+        total_users_now = CustomUser.objects.count()
+        users_until_this_month = CustomUser.objects.filter(date_joined__lt=this_month_start).count()
+        new_users_this_month = CustomUser.objects.filter(date_joined__gte=this_month_start).count()
+        user_growth = calculate_growth(total_users_now, users_until_this_month)
+
+        return Response({
+            "stats": {
+                "ppr": {
+                    "count": ppr_this_year,
+                    "growth_percentage": ppr_growth
+                },
+                "total_arizalar": {
+                    "count": arizalar_this_year,
+                    "growth_percentage": arizalar_growth
+                },
+                "completed_arizalar": {
+                    "count": completed_this_year,
+                    "growth_percentage": completed_growth
+                }
+            },
+            "user_growth": {
+                "total_users": total_users_now,
+                "new_users_this_month": new_users_this_month,
+                "growth_percentage": user_growth
+            }
+        })
   
   
 class TopTuzilmalarDashboardAPIView(APIView):

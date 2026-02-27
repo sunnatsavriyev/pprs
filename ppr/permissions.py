@@ -27,16 +27,30 @@ class IsBolim(permissions.BasePermission):
     
     
 class IsMonitoringReadOnly(permissions.BasePermission):
-    """
-    Monitoring role faqat ko‘rishi mumkin (GET, HEAD, OPTIONS)
-    """
     def has_permission(self, request, view):
         user = request.user
-        if not user.is_authenticated:
+        if not user or not user.is_authenticated:
             return False
 
-        if user.role == "monitoring":
-            # Faqat GET, HEAD, OPTIONS
-            return request.method in permissions.SAFE_METHODS
+        # Monitoring yangi narsa qo'sha olmaydi
+        if user.role == "monitoring" and request.method == "POST":
+            return False
 
-        return True 
+        return True
+
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        
+        # Admin yoki superuserga hamma narsa mumkin
+        if user.is_superuser or user.role == "admin":
+            return True
+
+        if user.role == "monitoring":
+            # Ko'rish (GET) hamma uchun ochiq
+            if request.method in permissions.SAFE_METHODS:
+                return True
+            
+            # Tahrirlash (PUT, PATCH) faqat o'zining ID si bilan mos kelsa
+            return obj.id == user.id
+
+        return True

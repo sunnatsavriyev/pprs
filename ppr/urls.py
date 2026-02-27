@@ -39,6 +39,7 @@ urlpatterns = [
     path("delete-steps/", StepDeleteAPIView.as_view(), name="delete-steps"),
     path('dashboard/stats/', PPRDashboardStatsView.as_view(), name='ppr-stats'),
     path('chart-statistics/', StatisticsChartAPIView.as_view(), name='chart-statistics'),
+    path('dashboard/main-stats/', DashboardStatsAPIView.as_view(), name='dashboard_stats'),
     path('top-tuzilmalararizasi/', TopTuzilmalarDashboardAPIView.as_view(), name='top-tuzilmalararizasi'),
     # path("kelgan-arizalar-image-delete/<int:pk>/", KelganArizalarImagedeleteAPIView.as_view()),
 ]
