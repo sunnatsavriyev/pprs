@@ -692,6 +692,7 @@ class Notification(models.Model):
     # is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     seen_by = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name='seen_notifications')
+    read_times = models.JSONField(default=dict, blank=True)
     class Meta:
         ordering = ['-created_at']
 

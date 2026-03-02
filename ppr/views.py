@@ -1508,6 +1508,9 @@ class NotificationViewSet(viewsets.ModelViewSet):
         # Ko'rgan userlar ro'yxatiga qo'shish
         if request.user not in instance.seen_by.all():
             instance.seen_by.add(request.user)
+            read_times = instance.read_times or {}
+            read_times[str(request.user.id)] = timezone.now().isoformat()
+            instance.read_times = read_times
             instance.save()
             
         return super().retrieve(request, *args, **kwargs)
@@ -1522,12 +1525,18 @@ class NotificationViewSet(viewsets.ModelViewSet):
         # 1. Bazaga yozish (PUT mantiqi)
         if is_read_sent is True:
             instance.seen_by.add(user)
+            read_times = instance.read_times or {}
+            read_times[str(user.id)] = timezone.now().isoformat()
+            instance.read_times = read_times
+            instance.save()
         elif is_read_sent is False:
             instance.seen_by.remove(user)
+            read_times = instance.read_times or {}
+            read_times.pop(str(user.id), None)
+            instance.read_times = read_times
+            instance.save()
         
-        # 2. MUHIM: Serializerga context={'request': request} beramiz.
-        # Shunda to_representation metodi request.user ni taniydi va 
-        # javobda (Response body) is_read: true bo'lib qaytadi.
+        
         serializer = self.get_serializer(instance, context={'request': request})
         
         return Response(serializer.data, status=status.HTTP_200_OK)

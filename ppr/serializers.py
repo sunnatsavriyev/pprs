@@ -2048,12 +2048,35 @@ class NotificationSerializer(serializers.ModelSerializer):
         many=True, read_only=True, slug_field='username', source='seen_by'
     )
     is_read = serializers.BooleanField(required=False)
+    read_time = serializers.SerializerMethodField()
 
     class Meta:
         model = Notification
-        fields = ['id', 'title', 'message', 'link_id', 'is_read', 'seen_usernames', 'created_at']
-        read_only_fields = ['id', 'title', 'message', 'link_id', 'seen_usernames', 'created_at']
+        fields = ['id', 'title', 'message', 'link_id', 'is_read', 'seen_usernames','read_time', 'created_at']
+        read_only_fields = ['id', 'title', 'message', 'link_id', 'seen_usernames', 'read_time', 'created_at']
 
+
+    def get_read_time(self, obj):
+        request = self.context.get('request')
+
+        if request and request.user.is_authenticated:
+            user_id = str(request.user.id)
+
+            if obj.read_times and user_id in obj.read_times:
+                dt = timezone.datetime.fromisoformat(obj.read_times[user_id])
+
+                # timezone ga o'tkazish
+                dt = timezone.localtime(dt)
+
+                return dt.strftime("%d-%m-%Y %H:%M")
+
+            if obj.seen_by.filter(id=request.user.id).exists():
+                dt = timezone.localtime(obj.created_at)
+                return dt.strftime("%d-%m-%Y %H:%M")
+
+        return None
+    
+    
     def to_representation(self, instance):
     
         ret = super().to_representation(instance)
