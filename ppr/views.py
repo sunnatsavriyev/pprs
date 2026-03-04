@@ -705,12 +705,34 @@ class ObyektNomiViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         user = self.request.user
-        # Obyektni yaratayotgan foydalanuvchining tegishli tashkilotlarini biriktiramiz
+        
+        # 1. Userning bo'lim profilidan kategoriyani olamiz
+        user_profile = getattr(user, 'bolim_profile', None)
+        if not user_profile or not user_profile.bolim_category:
+            raise ValidationError("Sizda bo'lim kategoriyasi aniqlanmagan.")
+
+        user_category = user_profile.bolim_category
+        obyekt_nomi = serializer.validated_data.get('obyekt_nomi')
+
+        # 2. Tekshirish
+        exists = ObyektNomi.objects.filter(
+            obyekt_nomi=obyekt_nomi,
+            tarkibiy_tuzilma=user.tarkibiy_tuzilma,
+            bekat=user.bekat_nomi,
+            bolim_category=user_category
+        ).exists()
+
+        if exists:
+            raise ValidationError({
+                "obyekt_nomi": f"'{user_category.nomi}' bo'limida ushbu nomli obyekt allaqachon mavjud."
+            })
+
+        # 3. Saqlash
         serializer.save(
             created_by=user,
             tarkibiy_tuzilma=user.tarkibiy_tuzilma,
             bekat=user.bekat_nomi,
-            bolim=user.bolim
+            bolim_category=user_category
         )
 
 
@@ -1756,68 +1778,105 @@ class PPRDashboardStatsView(APIView):
   
   
   
-  
+
+
 class DashboardStatsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
+        user = request.user
         now = timezone.now()
         this_year = now.year
         last_year = this_year - 1
         this_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-        # Foiz hisoblash funksiyasi (xatoliklarni oldini olish uchun)
+        # 1. Huquqni tekshirish
+        is_global_viewer = user.role in ["admin", "monitoring"] or user.is_superuser
+        
+        # 2. Filtrlarni shakllantirish
+        if not is_global_viewer:
+            if not user.tarkibiy_tuzilma:
+                return Response({"error": "Sizga tarkibiy tuzilma biriktirilmagan"}, status=403)
+            
+            tuzilma_filter = Q(tarkibiy_tuzilma=user.tarkibiy_tuzilma)
+            ariza_tuzilma_filter = Q(tuzilmalar=user.tarkibiy_tuzilma)
+            user_filter = Q(tarkibiy_tuzilma=user.tarkibiy_tuzilma)
+            # Yillik jadvalda tuzilma filteri (agar unda ham bo'lsa)
+            yillik_filter = Q(tarkibiy_tuzilma=user.tarkibiy_tuzilma)
+        else:
+            selected_id = request.query_params.get("tarkibiy_tuzilma")
+            if selected_id:
+                tuzilma_filter = Q(tarkibiy_tuzilma_id=selected_id)
+                ariza_tuzilma_filter = Q(tuzilmalar__id=selected_id)
+                user_filter = Q(tarkibiy_tuzilma_id=selected_id)
+                yillik_filter = Q(tarkibiy_tuzilma_id=selected_id)
+            else:
+                tuzilma_filter = Q()
+                ariza_tuzilma_filter = Q()
+                user_filter = Q()
+                yillik_filter = Q()
+
         def calculate_growth(current, previous):
             if previous == 0:
                 return 100.0 if current > 0 else 0.0
             return round(((current - previous) / previous) * 100, 2)
 
-        # 1. PPR Statistika (Kunlik + Yillik)
-        ppr_this_year = (
-            PPRJadval.objects.filter(sana__year=this_year).count() + 
-            PPRYillikJadval.objects.filter(yil=this_year).count()
+        # --- 1. YILLIK PPRLAR (Jadval + Yillik) ---
+        ppr_this = (
+            PPRJadval.objects.filter(tuzilma_filter, sana__year=this_year).count() +
+            PPRYillikJadval.objects.filter(yillik_filter, yil=this_year).count()
         )
-        ppr_last_year = (
-            PPRJadval.objects.filter(sana__year=last_year).count() + 
-            PPRYillikJadval.objects.filter(yil=last_year).count()
+        ppr_last = (
+            PPRJadval.objects.filter(tuzilma_filter, sana__year=last_year).count() +
+            PPRYillikJadval.objects.filter(yillik_filter, yil=last_year).count()
         )
-        ppr_growth = calculate_growth(ppr_this_year, ppr_last_year)
 
-        # 2. Hamma yuborilgan arizalar
-        arizalar_this_year = ArizaYuborish.objects.filter(sana__year=this_year).count()
-        arizalar_last_year = ArizaYuborish.objects.filter(sana__year=last_year).count()
-        arizalar_growth = calculate_growth(arizalar_this_year, arizalar_last_year)
+        # --- 2. MAVJUD ARIZALAR ---
+        ariza_this = ArizaYuborish.objects.filter(ariza_tuzilma_filter, sana__year=this_year).distinct().count()
+        ariza_last = ArizaYuborish.objects.filter(ariza_tuzilma_filter, sana__year=last_year).distinct().count()
 
-        # 3. Hamma bajarilgan arizalar
-        completed_this_year = ArizaYuborish.objects.filter(sana__year=this_year, status="bajarilgan").count()
-        completed_last_year = ArizaYuborish.objects.filter(sana__year=last_year, status="bajarilgan").count()
-        completed_growth = calculate_growth(completed_this_year, completed_last_year)
+        # --- 3. BAJARILGAN ARIZALAR ---
+        completed_this = ArizaYuborish.objects.filter(ariza_tuzilma_filter, sana__year=this_year, status="bajarilgan").distinct().count()
+        completed_last = ArizaYuborish.objects.filter(ariza_tuzilma_filter, sana__year=last_year, status="bajarilgan").distinct().count()
 
-        # 4. Userlar statistikasi (O'tgan oyga nisbatan o'sish)
-        total_users_now = CustomUser.objects.count()
-        users_until_this_month = CustomUser.objects.filter(date_joined__lt=this_month_start).count()
-        new_users_this_month = CustomUser.objects.filter(date_joined__gte=this_month_start).count()
-        user_growth = calculate_growth(total_users_now, users_until_this_month)
+        # --- 4. FOYDALANUVCHILAR ---
+        total_users = CustomUser.objects.filter(user_filter).count()
+        users_until_this_month = CustomUser.objects.filter(user_filter, date_joined__lt=this_month_start).count()
 
+        # Natijani qaytarish
         return Response({
             "stats": {
                 "ppr": {
-                    "count": ppr_this_year,
-                    "growth_percentage": ppr_growth
+                    "title": "Yillik PPRlar",
+                    "count": ppr_this,
+                    "growth_percentage": calculate_growth(ppr_this, ppr_last)
                 },
                 "total_arizalar": {
-                    "count": arizalar_this_year,
-                    "growth_percentage": arizalar_growth
+                    "title": "Mavjud Arizalar",
+                    "count": ariza_this,
+                    "growth_percentage": calculate_growth(ariza_this, ariza_last)
                 },
                 "completed_arizalar": {
-                    "count": completed_this_year,
-                    "growth_percentage": completed_growth
+                    "title": "Bajarilgan arizalar",
+                    "count": completed_this,
+                    "growth_percentage": calculate_growth(completed_this, completed_last)
+                },
+                "users": {
+                    "title": "Foydalanuvchilar",
+                    "count": total_users,
+                    "growth_percentage": calculate_growth(total_users, users_until_this_month)
                 }
             },
-            "user_growth": {
-                "total_users": total_users_now,
-                "new_users_this_month": new_users_this_month,
-                "growth_percentage": user_growth
+            "view_info": {
+                "tuzilma": user.tarkibiy_tuzilma.tuzilma_nomi if not is_global_viewer else "Barchasi",
+                "mode": "Global" if is_global_viewer else "Local"
             }
         })
+  
+  
+  
+  
+  
   
   
 class TopTuzilmalarDashboardAPIView(APIView):

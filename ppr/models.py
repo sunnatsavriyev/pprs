@@ -303,6 +303,7 @@ class ArizaYuborish(models.Model):
         verbose_name="Kim tomonidan",
         null=True, blank=True
     )
+    
     parol = models.CharField(max_length=100)
     status = models.CharField(max_length=20, choices=STATUS, default="jarayonda")
     created_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, blank=True)
@@ -401,12 +402,26 @@ class PPRTuri(models.Model):
 
 
 class ObyektNomi(models.Model):
-    obyekt_nomi = models.CharField(max_length=255,unique=True)
+    obyekt_nomi = models.CharField(max_length=255)
     toliq_nomi = models.TextField()
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
     tarkibiy_tuzilma = models.ForeignKey('TarkibiyTuzilma', on_delete=models.SET_NULL, null=True, blank=True)
     bekat = models.ForeignKey('Bekat', on_delete=models.SET_NULL, null=True, blank=True)
     bolim = models.ForeignKey('Bolim', on_delete=models.SET_NULL, null=True, blank=True)
+    bolim_category = models.ForeignKey(
+        'BolimCategory', 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        related_name='obyektlar'
+    )
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['obyekt_nomi', 'tarkibiy_tuzilma', 'bekat', 'bolim_category'], 
+                name='unique_obyekt_per_category'
+            )
+        ]
     def __str__(self):
         return self.obyekt_nomi
 
