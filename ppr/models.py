@@ -379,7 +379,7 @@ class KelganArizaImage(models.Model):
 class PPRTuri(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True)
     nomi = models.CharField(max_length=100, help_text="Masalan: Nomi", null=True, blank=True)
-    qisqachanomi = models.CharField(max_length=100, help_text="Masalan: Qisqa nomi", null=True, blank=True)
+    qisqachanomi = models.CharField(max_length=100, help_text="Masalan: Qisqa nomi", null=True, blank=True,)
     davriyligi = models.IntegerField(help_text="Masalan: qancha vaqtda", null=True, blank=True)
     VaqtiChoises = (
         ("soat", "soat"),
@@ -401,7 +401,7 @@ class PPRTuri(models.Model):
 
 
 class ObyektNomi(models.Model):
-    obyekt_nomi = models.CharField(max_length=255)
+    obyekt_nomi = models.CharField(max_length=255,unique=True)
     toliq_nomi = models.TextField()
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
     tarkibiy_tuzilma = models.ForeignKey('TarkibiyTuzilma', on_delete=models.SET_NULL, null=True, blank=True)
