@@ -766,140 +766,6 @@ class ObyektLocationViewSet(viewsets.ModelViewSet):
 
 
 
-
-
-class PPRYillikJadvalFilter(django_filters.FilterSet):
-    oy = django_filters.CharFilter(method='filter_oy')
-    yil = django_filters.NumberFilter()
-    tuzilma = django_filters.NumberFilter(field_name="tarkibiy_tuzilma_id")
-    bolim = django_filters.NumberFilter(field_name="bolim_id")
-
-    class Meta:
-        model = PPRYillikJadval
-        fields = ['yil', 'obyekt', 'ppr_turi', 'status', 'tasdiqlangan', 'tuzilma', 'bolim']
-
-    def filter_oy(self, queryset, name, value):
-        return queryset.filter(oylar__contains=[value])
-
-
-
-
-
-    
-
-class PPRYillikJadvalViewSet(viewsets.ModelViewSet):
-    serializer_class = PPRYillikJadvalSerializer
-    queryset = PPRYillikJadval.objects.all()
-    permission_classes = [permissions.IsAuthenticated, IsMonitoringReadOnly]
-    pagination_class = CustomPagination
-
-    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
-    filterset_class = PPRYillikJadvalFilter
-
-    search_fields = [
-        'obyekt__obyekt_nomi',
-        'ppr_turi__nomi',
-        'comment',
-    ]
-
-    ordering = ['-id']
-
-    def get_queryset(self):
-        user = self.request.user
-        qs = super().get_queryset().select_related('ppr_turi')
-        
-        bolim_filter = self.request.query_params.get("bolim_category")
-        tuzilma_filter = self.request.query_params.get("tuzilma")
-
-        # 1. ADMIN & MONITORING: Hamma bo'limlarni filter qila oladi
-        if user.is_superuser or user.is_admin() or user.is_monitoring():
-            if bolim_filter:
-                qs = qs.filter(bolim_category__nomi__iexact=bolim_filter)
-            if tuzilma_filter:
-                qs = qs.filter(tarkibiy_tuzilma_id=tuzilma_filter)
-            return qs
-
-        # 2. TARKIBIY (RAHBAR): Faqat o'z tuzilmasi va tanlangan bo'lim
-        if user.is_tarkibiy():
-            if not bolim_filter:
-                return qs.none() # Bo'lim tanlanmasa bo'sh
-            return qs.filter(
-                tarkibiy_tuzilma=user.tarkibiy_tuzilma,
-                bolim_category__nomi__iexact=bolim_filter
-            ).exclude(status="jarayonda") # Rahbar jarayondagilarni ko'rmaydi
-
-        # 3. BO'LIM: Faqat o'z bo'limi
-        if user.is_bolim():
-            user_bolim_cat = getattr(user.bolim_profile, 'bolim_category', None)
-            if not user_bolim_cat: return qs.none()
-            
-            # O'zi yaratganlar (hamma status) YOKI boshqalar yaratgan tasdiqlanganlar
-            return qs.filter(bolim_category=user_bolim_cat).filter(
-                models.Q(created_by=user) | models.Q(tasdiqlangan=True)
-            ).distinct()
-
-        return qs.none()
-
-
-    def create(self, request, *args, **kwargs):
-        oylar = request.data.getlist("oylar")
-        obyektlar = request.data.getlist("obyekt")
-
-        if not oylar or not obyektlar:
-            return Response(
-                {"error": "Oylar va Obyektlar tanlanishi shart"},
-                status=400
-            )
-
-        data = request.data.copy()
-        data.setlist("oylar", oylar)
-        data.setlist("obyekt", obyektlar)
-
-        serializer = self.get_serializer(data=data)
-        serializer.is_valid(raise_exception=True)
-        self.perform_create(serializer)
-
-        return Response(serializer.data, status=201)
-
-
-    def perform_create(self, serializer):
-        user = self.request.user
-        bolim_cat = getattr(user.bolim_profile, 'bolim_category', None) if hasattr(user, 'bolim_profile') else None
-        
-        serializer.save(
-            created_by=user,
-            tarkibiy_tuzilma=user.tarkibiy_tuzilma,
-            bolim_category=bolim_cat,
-            bekat=getattr(user, 'bekat_nomi', None),
-            bolim=getattr(user, 'bolim', None)
-        )
-
-
-
-
-class PPRYillikYuborishViewSet(viewsets.ModelViewSet):
-    queryset = PPRYillikYuborish.objects.all()
-    serializer_class = PPRYillikYuborishSerializer
-
-    def get_queryset(self):
-        user = self.request.user
-        if user.is_bolim():
-            return self.queryset.filter(user=user)
-        if user.is_tarkibiy():
-            return self.queryset.filter(tarkibiy_tuzilma=user.tarkibiy_tuzilma)
-        return self.queryset
-
-class PPRYillikTasdiqlashViewSet(viewsets.ModelViewSet):
-    queryset = PPRYillikTasdiqlash.objects.all()
-    serializer_class = PPRYillikTasdiqlashSerializer
-
-    def get_queryset(self):
-        user = self.request.user
-        if user.is_tarkibiy():
-            return self.queryset.filter(yuborish_paketi__tarkibiy_tuzilma=user.tarkibiy_tuzilma)
-        return super().get_queryset()
-
-
 class PPRJadvalFilter(filters.FilterSet):
     tuzilma = filters.NumberFilter(field_name="tarkibiy_tuzilma_id")
 
@@ -1202,53 +1068,6 @@ class PPRBajarildiViewSet(viewsets.ModelViewSet):
     
     
 
-
-
-class PPRYillikBajarildiViewSet(viewsets.ModelViewSet):
-    serializer_class = PPRYillikBajarildiSerializer
-    permission_classes = [permissions.IsAuthenticated, IsMonitoringReadOnly]
-
-    def get_queryset(self):
-        user = self.request.user
-        qs = PPRYillikBajarildi.objects.select_related(
-            'jadval', 'jadval__ppr_turi', 'user'
-        ).order_by('created_at')
-
-        if user.is_superuser or getattr(user, 'role', None) == "admin":
-            return qs
-
-        # Tarkibiy
-        if user.is_tarkibiy() and user.tarkibiy_tuzilma:
-            return qs.filter(jadval__ppr_turi__user=user)
-
-        # Bekat
-        if user.is_bekat() and user.bekat_nomi:
-            return qs.filter(jadval__ppr_turi__user=user)
-
-        # Bolim
-        if user.is_bolim() and user.bolim:
-            return qs.filter(jadval__ppr_turi__user=user)
-
-        # Monitoring hammasini ko‘radi, lekin faqat GET
-        if user.is_monitoring():
-            return qs
-
-        return PPRYillikBajarildi.objects.none()
-
-    def retrieve(self, request, *args, **kwargs):
-        # Shunchaki standart retrieve ishlayveradi
-        instance = self.get_object()
-        serializer = self.get_serializer(instance)
-        
-        return Response({
-            "jadval_id": instance.jadval.id,
-            "oy": instance.oy,
-            "data": serializer.data
-        })
-
-
-    
-    
     
     
     
@@ -1823,12 +1642,10 @@ class DashboardStatsAPIView(APIView):
 
         # --- 1. YILLIK PPRLAR (Jadval + Yillik) ---
         ppr_this = (
-            PPRJadval.objects.filter(tuzilma_filter, sana__year=this_year).count() +
-            PPRYillikJadval.objects.filter(yillik_filter, yil=this_year).count()
+            PPRJadval.objects.filter(tuzilma_filter, sana__year=this_year).count()
         )
         ppr_last = (
-            PPRJadval.objects.filter(tuzilma_filter, sana__year=last_year).count() +
-            PPRYillikJadval.objects.filter(yillik_filter, yil=last_year).count()
+            PPRJadval.objects.filter(tuzilma_filter, sana__year=last_year).count() 
         )
 
         # --- 2. MAVJUD ARIZALAR ---

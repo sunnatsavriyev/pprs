@@ -111,53 +111,10 @@ class ObyektLocationAdmin(admin.ModelAdmin):
 
 
 
-@admin.register(PPRYillikJadval)
-class PPRYillikJadvalAdmin(admin.ModelAdmin):
-    # Obyekt ManyToMany bo'lgani uchun list_display'da to'g'ridan-to'g'ri ko'rsatib bo'lmaydi
-    # Buning uchun maxsus funksiya yozamiz
-    list_display = ('yil', 'get_obyektlar', 'get_oylar', 'ppr_turi', 'bolim_category', 'tasdiqlangan', 'status')
-    list_filter = ('yil', 'status', 'tasdiqlangan', 'bolim_category', 'tarkibiy_tuzilma')
-    search_fields = ('comment', 'ppr_turi__nomi', 'obyekt__obyekt_nomi')
-    filter_horizontal = ('obyekt',) # Admin panelda obyektlarni qulay tanlash uchun (box ko'rinishi)
-
-    def get_obyektlar(self, obj):
-        # Obyektlar ro'yxatini vergul bilan chiqarish
-        return ", ".join([o.obyekt_nomi for o in obj.obyekt.all()])
-    get_obyektlar.short_description = "Obyektlar"
-
-    def get_oylar(self, obj):
-        # JSONField ichidagi oylarni vergul bilan chiqarish
-        if isinstance(obj.oylar, list):
-            return ", ".join(obj.oylar)
-        return obj.oylar
-    get_oylar.short_description = "Rejalashtirilgan oylar"
 
 
-@admin.register(PPRYillikYuborish)
-class PPRYillikYuborishAdmin(admin.ModelAdmin):
-    list_display = ('yil', 'bolim_category', 'tarkibiy_tuzilma', 'user', 'created_at', 'get_status')
-    list_filter = ('yil', 'bolim_category', 'tarkibiy_tuzilma')
-    readonly_fields = ('created_at',)
-
-    def get_status(self, obj):
-        # Paket holatini (tasdiqlangan yoki rad etilganligini) ko'rish
-        if hasattr(obj, 'qaror'):
-            color = 'green' if obj.qaror.status == 'tasdiqlandi' else 'red'
-            return format_html('<b style="color: {};">{}</b>', color, obj.qaror.get_status_display())
-        return "Kutilmoqda"
-    get_status.short_description = "Qaror holati"
 
 
-@admin.register(PPRYillikTasdiqlash)
-class PPRYillikTasdiqlashAdmin(admin.ModelAdmin):
-    list_display = ('yuborish_paketi', 'user', 'status', 'created_at')
-    list_filter = ('status', 'created_at')
-    search_fields = ('comment', 'user__username')
-    readonly_fields = ('created_at',)
-
-    # Tasdiqlashda qaysi paket ekanligini chiroyli ko'rsatish
-    def get_queryset(self, request):
-        return super().get_queryset(request).select_related('yuborish_paketi', 'user')
 
 
 @admin.register(PPRJadval)
@@ -186,22 +143,6 @@ class PPRTasdiqlashAdmin(admin.ModelAdmin):
     list_filter = ('status',)
     
     
-
-class PPRYillikBajarildiImageInline(admin.TabularInline):
-    model = PPRYillikBajarildiImage
-    extra = 1
-
-
-@admin.register(PPRYillikBajarildi)
-class PPRYillikBajarildiAdmin(admin.ModelAdmin):
-    list_display = ('jadval', 'oy', 'user', 'created_at')
-    list_filter = ('oy', 'jadval')
-    search_fields = ('jadval__name', 'user__username')
-    ordering = ('-created_at',)
-    inlines = [PPRYillikBajarildiImageInline]
-
-
-
 
 
 
